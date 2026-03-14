@@ -19,12 +19,13 @@ import (
 type App struct {
 	ctx context.Context
 
-	// 录制模式
-	pty    *transport.PtyTransport
-	serial *transport.SerialTransport
-	golden *session.Session
+	// 串口
+	pty1   *transport.PtyTransport  // 代理串口（烧录工具连接）
+	pty2   *transport.PtyTransport  // 虚拟串口（测试模式）
+	serial *transport.SerialTransport // 真实串口（录制模式）
 
-	// 对比模式
+	// 会话
+	golden    *session.Session
 	comparator *comparator.Comparator
 
 	mu        sync.Mutex
@@ -48,13 +49,12 @@ func (a *App) ListSerialPorts() ([]string, error) {
 	return transport.ListPorts()
 }
 
-// ==================== 录制模式（中间人） ====================
+// ==================== 录制模式（真实设备） ====================
 
-// StartRecording 启动中间人录制
-// devicePort: 真实设备串口 (如 /dev/ttyUSB0)
-// baud: 波特率
-// 返回虚拟串口路径供烧录工具连接
-func (a *App) StartRecording(devicePort string, baud int) (string, error) {
+// StartRecord 启动录制模式
+// devicePort: 真实设备串口路径（可选，不填则等待自动连接）
+// 返回代理串口路径供烧录工具连接
+func (a *App) StartRecord(devicePort string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -62,37 +62,90 @@ func (a *App) StartRecording(devicePort string, baud int) (string, error) {
 		return "", fmt.Errorf("already running")
 	}
 
-	// 创建 PTY 虚拟串口（给烧录工具用）
-	pty, err := transport.NewPtyTransport()
+	// 创建代理串口
+	pty1, err := transport.NewPtyTransport()
 	if err != nil {
-		return "", fmt.Errorf("create PTY failed: %w", err)
+		return "", fmt.Errorf("create proxy port failed: %w", err)
 	}
 
-	// 连接真实设备
-	serial, err := transport.NewSerialTransport(devicePort, baud)
-	if err != nil {
-		pty.Close()
-		return "", fmt.Errorf("connect device failed: %w", err)
-	}
-
-	a.pty = pty
-	a.serial = serial
-	a.golden = session.NewSession(devicePort, baud)
+	a.pty1 = pty1
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
+	a.golden = session.NewSession("", 0)
 
-	// 启动双向转发
-	go a.bridgeLoop()
+	// 如果指定了真实串口，延迟连接（等待波特率设置）
+	if devicePort != "" {
+		go func() {
+			// 等待波特率或超时
+			select {
+			case baud := <-pty1.BaudChange():
+				// 获取到波特率，连接真实串口
+				serial, err := transport.NewSerialTransport(devicePort, baud)
+				if err != nil {
+					runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("connect device failed: %v", err))
+					return
+				}
+				a.mu.Lock()
+				a.serial = serial
+				a.golden = session.NewSession(devicePort, baud)
+				a.mu.Unlock()
+				
+				runtime.EventsEmit(a.ctx, "connected", map[string]interface{}{
+					"device": devicePort,
+					"baud":   baud,
+				})
+				
+				// 启动桥接
+				go a.bridgeLoop(a.pty1, serial)
+				
+			case <-time.After(30 * time.Second):
+				runtime.EventsEmit(a.ctx, "error", "timeout waiting for baud rate")
+			case <-a.stopChan:
+				return
+			}
+		}()
+	}
 
-	return pty.SlavePath(), nil
+	return pty1.SlavePath(), nil
 }
 
-// bridgeLoop 双向桥接循环
-func (a *App) bridgeLoop() {
+// ConnectDevice 连接真实设备（手动指定波特率）
+func (a *App) ConnectDevice(devicePort string, baud int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.serial != nil {
+		return fmt.Errorf("device already connected")
+	}
+
+	serial, err := transport.NewSerialTransport(devicePort, baud)
+	if err != nil {
+		return fmt.Errorf("connect device failed: %w", err)
+	}
+
+	a.serial = serial
+	a.golden = session.NewSession(devicePort, baud)
+
+	runtime.EventsEmit(a.ctx, "connected", map[string]interface{}{
+		"device": devicePort,
+		"baud":   baud,
+	})
+
+	// 启动桥接
+	go a.bridgeLoop(a.pty1, serial)
+
+	return nil
+}
+
+// bridgeLoop 双向桥接
+func (a *App) bridgeLoop(pty *transport.PtyTransport, target interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+}) {
 	recordChan := make(chan recordEvent, 1000)
 	doneChan := make(chan error, 2)
 
-	// 烧录工具 → 设备 (TX)
+	// PTY → Target (TX)
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -101,16 +154,13 @@ func (a *App) bridgeLoop() {
 				doneChan <- nil
 				return
 			default:
-				n, err := a.pty.Read(buf)
+				n, err := pty.Read(buf)
 				if err != nil {
 					doneChan <- err
 					return
 				}
 				if n > 0 {
-					// 转发到设备
-					a.serial.Write(buf[:n])
-
-					// 记录 TX
+					target.Write(buf[:n])
 					data := make([]byte, n)
 					copy(data, buf[:n])
 					recordChan <- recordEvent{dir: session.TX, data: data}
@@ -119,7 +169,7 @@ func (a *App) bridgeLoop() {
 		}
 	}()
 
-	// 设备 → 烧录工具 (RX)
+	// Target → PTY (RX)
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -128,16 +178,13 @@ func (a *App) bridgeLoop() {
 				doneChan <- nil
 				return
 			default:
-				n, err := a.serial.Read(buf)
+				n, err := target.Read(buf)
 				if err != nil {
 					doneChan <- err
 					return
 				}
 				if n > 0 {
-					// 转发到烧录工具
-					a.pty.Write(buf[:n])
-
-					// 记录 RX
+					pty.Write(buf[:n])
 					data := make([]byte, n)
 					copy(data, buf[:n])
 					recordChan <- recordEvent{dir: session.RX, data: data}
@@ -146,7 +193,6 @@ func (a *App) bridgeLoop() {
 		}
 	}()
 
-	// 记录循环
 	for {
 		select {
 		case <-a.stopChan:
@@ -157,9 +203,10 @@ func (a *App) bridgeLoop() {
 			}
 			return
 		case evt := <-recordChan:
+			a.mu.Lock()
 			a.golden.Add(evt.dir, evt.data)
+			a.mu.Unlock()
 
-			// 发送事件到前端
 			runtime.EventsEmit(a.ctx, "record", map[string]interface{}{
 				"direction": string(evt.dir),
 				"data":      hex.EncodeToString(evt.data),
@@ -174,77 +221,44 @@ type recordEvent struct {
 	data []byte
 }
 
-// StopRecording 停止录制
-func (a *App) StopRecording() error {
+// ==================== 测试模式（双虚拟串口） ====================
+
+// StartTest 启动测试模式
+// 返回: (代理串口, 测试下位串口)
+func (a *App) StartTest() (string, string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if !a.isRunning {
-		return nil
+	if a.isRunning {
+		return "", "", fmt.Errorf("already running")
 	}
 
-	close(a.stopChan)
-	a.isRunning = false
-
-	var errs []error
-	if a.pty != nil {
-		if err := a.pty.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		a.pty = nil
-	}
-	if a.serial != nil {
-		if err := a.serial.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		a.serial = nil
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("close errors: %v", errs)
-	}
-	return nil
-}
-
-// SaveSession 保存会话
-func (a *App) SaveSession(path string) error {
-	if a.golden == nil {
-		return fmt.Errorf("no session to save")
-	}
-	return a.golden.Save(path)
-}
-
-// LoadSession 加载会话
-func (a *App) LoadSession(path string) error {
-	s, err := session.Load(path)
+	// 创建两个 PTY
+	pty1, err := transport.NewPtyTransport()
 	if err != nil {
-		return err
-	}
-	a.golden = s
-	a.comparator = comparator.NewComparator(a.golden)
-	return nil
-}
-
-// GetRecords 获取记录列表
-func (a *App) GetRecords() []map[string]interface{} {
-	if a.golden == nil {
-		return nil
+		return "", "", fmt.Errorf("create proxy port failed: %w", err)
 	}
 
-	records := make([]map[string]interface{}, len(a.golden.Records))
-	for i, r := range a.golden.Records {
-		records[i] = map[string]interface{}{
-			"index":     r.Index,
-			"direction": string(r.Direction),
-			"data":      hex.EncodeToString(r.Data),
-		}
+	pty2, err := transport.NewPtyTransport()
+	if err != nil {
+		pty1.Close()
+		return "", "", fmt.Errorf("create test port failed: %w", err)
 	}
-	return records
+
+	a.pty1 = pty1
+	a.pty2 = pty2
+	a.isRunning = true
+	a.stopChan = make(chan struct{})
+
+	// 启动双向桥接
+	go a.bridgeLoop(pty1, pty2)
+
+	return pty1.SlavePath(), pty2.SlavePath(), nil
 }
 
 // ==================== 对比模式 ====================
 
-// StartCompare 开始对比
+// StartCompare 启动对比模式
 func (a *App) StartCompare() (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -262,7 +276,7 @@ func (a *App) StartCompare() (string, error) {
 		return "", err
 	}
 
-	a.pty = pty
+	a.pty1 = pty
 	a.comparator = comparator.NewComparator(a.golden)
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
@@ -281,7 +295,7 @@ func (a *App) compareLoop() {
 		case <-a.stopChan:
 			return
 		default:
-			n, err := a.pty.Read(buf)
+			n, err := a.pty1.Read(buf)
 			if err != nil {
 				time.Sleep(10 * time.Millisecond)
 				continue
@@ -291,16 +305,13 @@ func (a *App) compareLoop() {
 				data := make([]byte, n)
 				copy(data, buf[:n])
 
-				// 创建对比记录
 				actual := &session.Record{
 					Direction: session.TX,
 					Data:      data,
 				}
 
-				// 执行对比
 				result := a.comparator.Compare(actual)
 
-				// 发送事件到前端
 				runtime.EventsEmit(a.ctx, "compare", map[string]interface{}{
 					"index":    result.Index,
 					"expected": formatRecord(result.ExpectedTX),
@@ -308,16 +319,15 @@ func (a *App) compareLoop() {
 					"match":    result.Result == comparator.Match,
 				})
 
-				// 回放 RX 响应
+				// 回放 RX
 				if result.ExpectedRX != nil {
-					a.pty.Write(result.ExpectedRX.Data)
+					a.pty1.Write(result.ExpectedRX.Data)
 					runtime.EventsEmit(a.ctx, "replay", map[string]interface{}{
 						"direction": "RX",
 						"data":      hex.EncodeToString(result.ExpectedRX.Data),
 					})
 				}
 
-				// 更新统计
 				matched, diff, _ := a.comparator.Stats()
 				runtime.EventsEmit(a.ctx, "stats", map[string]int{
 					"matched": matched,
@@ -328,7 +338,6 @@ func (a *App) compareLoop() {
 	}
 }
 
-// formatRecord 格式化记录
 func formatRecord(r *session.Record) map[string]interface{} {
 	if r == nil {
 		return nil
@@ -340,8 +349,10 @@ func formatRecord(r *session.Record) map[string]interface{} {
 	}
 }
 
-// StopCompare 停止对比
-func (a *App) StopCompare() error {
+// ==================== 通用操作 ====================
+
+// Stop 停止当前操作
+func (a *App) Stop() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -352,18 +363,81 @@ func (a *App) StopCompare() error {
 	close(a.stopChan)
 	a.isRunning = false
 
-	if a.pty != nil {
-		err := a.pty.Close()
-		a.pty = nil
+	if a.pty1 != nil {
+		a.pty1.Close()
+		a.pty1 = nil
+	}
+	if a.pty2 != nil {
+		a.pty2.Close()
+		a.pty2 = nil
+	}
+	if a.serial != nil {
+		a.serial.Close()
+		a.serial = nil
+	}
+
+	return nil
+}
+
+// SaveSession 保存会话
+func (a *App) SaveSession(path string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.golden == nil {
+		return fmt.Errorf("no session to save")
+	}
+	return a.golden.Save(path)
+}
+
+// LoadSession 加载会话
+func (a *App) LoadSession(path string) error {
+	s, err := session.Load(path)
+	if err != nil {
 		return err
 	}
+	a.mu.Lock()
+	a.golden = s
+	a.comparator = comparator.NewComparator(a.golden)
+	a.mu.Unlock()
 	return nil
+}
+
+// GetRecords 获取记录列表
+func (a *App) GetRecords() []map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.golden == nil {
+		return nil
+	}
+
+	records := make([]map[string]interface{}, len(a.golden.Records))
+	for i, r := range a.golden.Records {
+		records[i] = map[string]interface{}{
+			"index":     r.Index,
+			"direction": string(r.Direction),
+			"data":      hex.EncodeToString(r.Data),
+		}
+	}
+	return records
 }
 
 // GetStats 获取统计
 func (a *App) GetStats() (matched, diff, total int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.comparator != nil {
 		return a.comparator.Stats()
 	}
 	return 0, 0, 0
+}
+
+// GetBaudRate 获取当前波特率（自动捕获）
+func (a *App) GetBaudRate() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.pty1 != nil {
+		return a.pty1.GetBaudRate()
+	}
+	return 0
 }

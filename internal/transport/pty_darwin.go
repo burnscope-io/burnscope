@@ -5,14 +5,18 @@ package transport
 import (
 	"fmt"
 	"os"
+	"sync"
 	"syscall"
 	"unsafe"
 )
 
 // PtyTransport PTY 虚拟串口传输
 type PtyTransport struct {
-	master    *os.File
-	slavePath string
+	master     *os.File
+	slavePath  string
+	baudRate   int
+	baudMu     sync.RWMutex
+	baudChange chan int
 }
 
 // NewPtyTransport 创建 PTY 虚拟串口
@@ -43,10 +47,17 @@ func NewPtyTransport() (*PtyTransport, error) {
 		return nil, fmt.Errorf("failed to unlock pty: %v", errno)
 	}
 
-	return &PtyTransport{
-		master:    master,
-		slavePath: slavePath,
-	}, nil
+	t := &PtyTransport{
+		master:     master,
+		slavePath:  slavePath,
+		baudRate:   0,
+		baudChange: make(chan int, 10),
+	}
+
+	// 启动波特率监听
+	go t.monitorBaudRate()
+
+	return t, nil
 }
 
 // getSlaveName 获取 slave 设备名 (macOS)
@@ -69,6 +80,70 @@ func getSlaveName(master *os.File) (string, error) {
 	for i = 0; i < len(n) && n[i] != 0; i++ {
 	}
 	return string(n[:i]), nil
+}
+
+// termios 结构 (macOS)
+type termios struct {
+	Iflag  uint64
+	Oflag  uint64
+	Cflag  uint64
+	Lflag  uint64
+	Cc     [20]byte
+	Ispeed uint64
+	Ospeed uint64
+}
+
+// monitorBaudRate 监听波特率变化
+func (t *PtyTransport) monitorBaudRate() {
+	// 打开 slave 设备获取 termios
+	slave, err := os.OpenFile(t.slavePath, os.O_RDONLY, 0)
+	if err != nil {
+		return
+	}
+	defer slave.Close()
+
+	var lastBaud int
+
+	for {
+		// 获取 termios
+		var term termios
+		_, _, errno := syscall.Syscall6(
+			syscall.SYS_IOCTL,
+			uintptr(slave.Fd()),
+			0x40487413, // TCGETS on macOS
+			uintptr(unsafe.Pointer(&term)),
+			0, 0, 0,
+		)
+
+		if errno == 0 {
+			baud := int(term.Ispeed)
+			if baud > 0 && baud != lastBaud {
+				lastBaud = baud
+				t.baudMu.Lock()
+				t.baudRate = baud
+				t.baudMu.Unlock()
+				select {
+				case t.baudChange <- baud:
+				default:
+				}
+			}
+		}
+
+		// 短间隔轮询
+		syscall.Select(0, nil, nil, nil, &syscall.Timeval{Usec: 50000})
+	}
+}
+
+// GetBaudRate 获取当前波特率
+func (t *PtyTransport) GetBaudRate() int {
+	t.baudMu.RLock()
+	defer t.baudMu.RUnlock()
+	return t.baudRate
+}
+
+// BaudChange 返回波特率变化通道
+func (t *PtyTransport) BaudChange() <-chan int {
+	return t.baudChange
 }
 
 // Read 从 master 读取数据
