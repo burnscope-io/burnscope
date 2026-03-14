@@ -10,8 +10,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/burnscope-io/burnscope/internal/comparator"
-	"github.com/burnscope-io/burnscope/internal/protocol"
-	"github.com/burnscope-io/burnscope/internal/protocol/esp"
 	"github.com/burnscope-io/burnscope/internal/session"
 	"github.com/burnscope-io/burnscope/internal/transport"
 )
@@ -19,26 +17,20 @@ import (
 // App 应用状态
 type App struct {
 	ctx        context.Context
-	parser     protocol.Parser
 	golden     *session.Session
 	comparator *comparator.Comparator
 	pty        *transport.PtyTransport
 	serial     *transport.SerialTransport
 
-	// 运行状态
 	mu        sync.Mutex
 	isRunning bool
 	stopChan  chan struct{}
-
-	// 对比模式
-	compareIndex int
 }
 
 // NewApp 创建应用
 func NewApp() *App {
 	return &App{
-		parser:    esp.NewESPFlashProtocol(),
-		stopChan:  make(chan struct{}),
+		stopChan: make(chan struct{}),
 	}
 }
 
@@ -66,7 +58,7 @@ func (a *App) StartRecording(port string, baud int) error {
 		return err
 	}
 
-	a.golden = session.NewSession(port, baud, a.parser.Name())
+	a.golden = session.NewSession(port, baud)
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
 
@@ -78,7 +70,6 @@ func (a *App) StartRecording(port string, baud int) error {
 // recordLoop 录制循环
 func (a *App) recordLoop() {
 	buf := make([]byte, 4096)
-	accumulated := make([]byte, 0, 8192)
 
 	for {
 		select {
@@ -87,6 +78,7 @@ func (a *App) recordLoop() {
 		default:
 			n, err := a.serial.Read(buf)
 			if err != nil {
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 
@@ -94,38 +86,14 @@ func (a *App) recordLoop() {
 				data := make([]byte, n)
 				copy(data, buf[:n])
 
-				// 添加到累积缓冲区
-				accumulated = append(accumulated, data...)
+				a.golden.Add(session.TX, data)
 
-				// 解析完整帧
-				commands := a.parser.Parse(accumulated)
-
-				// 清除已解析的部分
-				if len(commands) > 0 {
-					// 找到最后一个完整帧的结束位置
-					// 简化处理：清除累积缓冲区
-					accumulated = accumulated[:0]
-				}
-
-				// 发送命令到前端
-				for _, cmd := range commands {
-					record := session.Record{
-						Index:     cmd.Index,
-						Direction: cmd.Direction.String(),
-						Name:      cmd.Name,
-						RawData:   cmd.RawData,
-						Timestamp: time.Now(),
-					}
-					a.golden.AddCommand(cmd)
-
-					// 发送事件到前端
-					runtime.EventsEmit(a.ctx, "record", map[string]interface{}{
-						"index":     record.Index,
-						"direction": record.Direction,
-						"name":      record.Name,
-						"raw_data":  hex.EncodeToString(record.RawData),
-					})
-				}
+				// 发送事件到前端
+				runtime.EventsEmit(a.ctx, "record", map[string]interface{}{
+					"direction": "TX",
+					"data":      hex.EncodeToString(data),
+					"size":      n,
+				})
 			}
 		}
 	}
@@ -180,9 +148,8 @@ func (a *App) GetRecords() []map[string]interface{} {
 	for i, r := range a.golden.Records {
 		records[i] = map[string]interface{}{
 			"index":     r.Index,
-			"direction": r.Direction,
-			"name":      r.Name,
-			"raw_data":  hex.EncodeToString(r.RawData),
+			"direction": string(r.Direction),
+			"data":      hex.EncodeToString(r.Data),
 		}
 	}
 	return records
@@ -198,7 +165,7 @@ func (a *App) StartCompare() (string, error) {
 	}
 
 	if a.golden == nil || len(a.golden.Records) == 0 {
-		return "", fmt.Errorf("no golden session loaded, please record first")
+		return "", fmt.Errorf("no golden session loaded")
 	}
 
 	var err error
@@ -208,7 +175,6 @@ func (a *App) StartCompare() (string, error) {
 	}
 
 	a.comparator = comparator.NewComparator(a.golden)
-	a.compareIndex = 0
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
 
@@ -220,7 +186,7 @@ func (a *App) StartCompare() (string, error) {
 // compareLoop 对比循环
 func (a *App) compareLoop() {
 	buf := make([]byte, 4096)
-	accumulated := make([]byte, 0, 8192)
+	pos := 0
 
 	for {
 		select {
@@ -229,6 +195,7 @@ func (a *App) compareLoop() {
 		default:
 			n, err := a.pty.Read(buf)
 			if err != nil {
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 
@@ -236,64 +203,43 @@ func (a *App) compareLoop() {
 				data := make([]byte, n)
 				copy(data, buf[:n])
 
-				// 累积数据
-				accumulated = append(accumulated, data...)
-
-				// 解析帧
-				commands := a.parser.Parse(accumulated)
-
-				if len(commands) > 0 {
-					accumulated = accumulated[:0]
+				// 创建对比记录
+				actual := &session.Record{
+					Index:     pos + 1,
+					Direction: session.TX,
+					Data:      data,
 				}
 
-				// 对比每个命令
-				for _, cmd := range commands {
-					a.compareCommand(cmd)
+				// 执行对比
+				result := a.comparator.Compare(actual)
+				pos++
+
+				// 发送事件到前端
+				runtime.EventsEmit(a.ctx, "compare", map[string]interface{}{
+					"index":    result.Index,
+					"expected": formatRecord(result.Expected),
+					"actual":   formatRecord(result.Actual),
+					"match":    result.Result == comparator.Match,
+				})
+
+				// 如果基准有对应的响应，返回响应
+				if result.Expected != nil && pos < len(a.golden.Records) {
+					next := a.golden.Records[pos]
+					if next.Direction == session.RX {
+						a.pty.Write(next.Data)
+						pos++
+					}
 				}
+
+				// 更新统计
+				matched, diff, _ := a.comparator.Stats()
+				runtime.EventsEmit(a.ctx, "stats", map[string]int{
+					"matched": matched,
+					"diff":    diff,
+				})
 			}
 		}
 	}
-}
-
-// compareCommand 对比单个命令
-func (a *App) compareCommand(cmd *protocol.Command) {
-	if a.comparator == nil {
-		return
-	}
-
-	// 获取基准记录
-	var baseline *session.Record
-	if a.compareIndex < len(a.golden.Records) {
-		baseline = &a.golden.Records[a.compareIndex]
-	}
-
-	// 创建对比记录
-	compare := &session.Record{
-		Index:     cmd.Index,
-		Direction: cmd.Direction.String(),
-		Name:      cmd.Name,
-		RawData:   cmd.RawData,
-	}
-
-	// 执行对比
-	result := a.comparator.Compare(compare)
-	a.compareIndex++
-
-	// 发送事件到前端
-	runtime.EventsEmit(a.ctx, "compare", map[string]interface{}{
-		"index":     result.Index,
-		"baseline":  formatRecord(baseline),
-		"compare":   formatRecord(compare),
-		"match":     result.Result == comparator.Match,
-		"message":   result.Message,
-	})
-
-	// 更新统计
-	matched, diff, _ := a.comparator.Stats()
-	runtime.EventsEmit(a.ctx, "stats", map[string]int{
-		"matched": matched,
-		"diff":    diff,
-	})
 }
 
 // formatRecord 格式化记录
@@ -303,9 +249,8 @@ func formatRecord(r *session.Record) map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"index":     r.Index,
-		"direction": r.Direction,
-		"name":      r.Name,
-		"raw_data":  hex.EncodeToString(r.RawData),
+		"direction": string(r.Direction),
+		"data":      hex.EncodeToString(r.Data),
 	}
 }
 

@@ -5,12 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/burnscope-io/burnscope/internal/protocol"
 )
 
 func TestNewSession(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	s := NewSession("/dev/ttyUSB0", 115200)
 
 	if s.Device != "/dev/ttyUSB0" {
 		t.Errorf("s.Device = %s, want /dev/ttyUSB0", s.Device)
@@ -18,57 +16,25 @@ func TestNewSession(t *testing.T) {
 	if s.BaudRate != 115200 {
 		t.Errorf("s.BaudRate = %d, want 115200", s.BaudRate)
 	}
-	if s.Protocol != "ESP-FLASH" {
-		t.Errorf("s.Protocol = %s, want ESP-FLASH", s.Protocol)
-	}
 	if len(s.Records) != 0 {
 		t.Errorf("len(s.Records) = %d, want 0", len(s.Records))
 	}
 }
 
-func TestAddCommand(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+func TestAdd(t *testing.T) {
+	s := NewSession("/dev/ttyUSB0", 115200)
 
-	cmd := &protocol.Command{
-		Index:     1,
-		Direction: protocol.TX,
-		Name:      "SYNC",
-		RawData:   []byte{0xC0, 0x00, 0x08, 0xC0},
-	}
-
-	s.AddCommand(cmd)
-
-	if len(s.Records) != 1 {
-		t.Fatalf("len(s.Records) = %d, want 1", len(s.Records))
-	}
-
-	r := s.Records[0]
-	if r.Index != 1 {
-		t.Errorf("r.Index = %d, want 1", r.Index)
-	}
-	if r.Direction != "TX" {
-		t.Errorf("r.Direction = %s, want TX", r.Direction)
-	}
-	if r.Name != "SYNC" {
-		t.Errorf("r.Name = %s, want SYNC", r.Name)
-	}
-}
-
-func TestAddRawData(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
-
-	data := []byte{0x01, 0x02, 0x03}
-	s.AddRawData(protocol.TX, data)
-	s.AddRawData(protocol.RX, data)
+	s.Add(TX, []byte{0x01, 0x02, 0x03})
+	s.Add(RX, []byte{0x04, 0x05})
 
 	if len(s.Records) != 2 {
 		t.Fatalf("len(s.Records) = %d, want 2", len(s.Records))
 	}
 
-	if s.Records[0].Direction != "TX" {
+	if s.Records[0].Direction != TX {
 		t.Errorf("s.Records[0].Direction = %s, want TX", s.Records[0].Direction)
 	}
-	if s.Records[1].Direction != "RX" {
+	if s.Records[1].Direction != RX {
 		t.Errorf("s.Records[1].Direction = %s, want RX", s.Records[1].Direction)
 	}
 }
@@ -77,16 +43,14 @@ func TestSaveAndLoad(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "session.json")
 
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
-	s.AddRawData(protocol.TX, []byte{0x01})
-	s.AddRawData(protocol.RX, []byte{0x02})
+	s := NewSession("/dev/ttyUSB0", 115200)
+	s.Add(TX, []byte{0x01})
+	s.Add(RX, []byte{0x02})
 
-	// 保存
 	if err := s.Save(path); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	// 加载
 	loaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -104,16 +68,16 @@ func TestSaveAndLoad(t *testing.T) {
 }
 
 func TestGetStats(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	s := NewSession("/dev/ttyUSB0", 115200)
 
-	s.AddRawData(protocol.TX, []byte{0x01})
-	s.AddRawData(protocol.RX, []byte{0x02})
-	s.AddRawData(protocol.TX, []byte{0x03})
+	s.Add(TX, []byte{0x01})
+	s.Add(RX, []byte{0x02})
+	s.Add(TX, []byte{0x03})
 
 	stats := s.GetStats()
 
-	if stats.TotalCommands != 3 {
-		t.Errorf("stats.TotalCommands = %d, want 3", stats.TotalCommands)
+	if stats.Total != 3 {
+		t.Errorf("stats.Total = %d, want 3", stats.Total)
 	}
 	if stats.TXCount != 2 {
 		t.Errorf("stats.TXCount = %d, want 2", stats.TXCount)
@@ -124,10 +88,10 @@ func TestGetStats(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	s := NewSession("/dev/ttyUSB0", 115200)
 
-	s.AddRawData(protocol.TX, []byte{0x01})
-	s.AddRawData(protocol.RX, []byte{0x02})
+	s.Add(TX, []byte{0x01})
+	s.Add(RX, []byte{0x02})
 
 	s.Clear()
 
@@ -147,12 +111,10 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "subdir", "session.json")
 
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	s := NewSession("/dev/ttyUSB0", 115200)
 
-	// 当前实现不会自动创建目录，这应该返回错误
 	err := s.Save(path)
 	if err == nil {
-		// 如果成功了，验证文件存在
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("file should exist after Save()")
 		}
@@ -160,10 +122,10 @@ func TestSaveCreatesDirectory(t *testing.T) {
 }
 
 func TestRecordTimestamp(t *testing.T) {
-	s := NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	s := NewSession("/dev/ttyUSB0", 115200)
 
 	before := time.Now()
-	s.AddRawData(protocol.TX, []byte{0x01})
+	s.Add(TX, []byte{0x01})
 	after := time.Now()
 
 	if s.Records[0].Timestamp.Before(before) || s.Records[0].Timestamp.After(after) {

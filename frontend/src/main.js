@@ -1,17 +1,10 @@
-// burnscope frontend - Wails bindings
+// burnscope frontend
 
-// Wails runtime
-let runtime;
-
-// State
 let state = {
-    mode: 'record',  // 'record' | 'compare'
-    isRunning: false,
-    port: '',
-    baud: 115200
+    mode: 'record',
+    isRunning: false
 };
 
-// DOM Elements
 const portSelect = document.getElementById('port-select');
 const baudSelect = document.getElementById('baud-select');
 const actionBtn = document.getElementById('action-btn');
@@ -19,33 +12,23 @@ const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const recordsDiv = document.getElementById('records');
 const emptyState = document.getElementById('empty-state');
-const recordsTitle = document.getElementById('records-title');
 const statMatch = document.getElementById('stat-match');
 const statDiff = document.getElementById('stat-diff');
 const ptyPath = document.getElementById('pty-path');
 const modeTabs = document.querySelectorAll('.mode-tab');
 
-// Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-    // Get Wails runtime
-    runtime = window['@wailsapp/runtime'];
-    
-    // Load ports
     await loadPorts();
     
-    // Setup mode tabs
     modeTabs.forEach(tab => {
         tab.addEventListener('click', () => switchMode(tab.dataset.mode));
     });
     
-    // Setup action button
     actionBtn.addEventListener('click', toggleAction);
     
-    // Refresh ports periodically
     setInterval(loadPorts, 3000);
 });
 
-// Load serial ports
 async function loadPorts() {
     try {
         const ports = await window.go.main.App.ListSerialPorts();
@@ -62,39 +45,24 @@ async function loadPorts() {
             opt.textContent = port;
             portSelect.appendChild(opt);
         });
-        
-        if (state.port && ports.includes(state.port)) {
-            portSelect.value = state.port;
-        }
     } catch (e) {
-        console.error('Failed to load ports:', e);
         portSelect.innerHTML = '<option value="">加载失败</option>';
     }
 }
 
-// Switch mode
 function switchMode(mode) {
     if (state.isRunning) return;
     
     state.mode = mode;
-    
     modeTabs.forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === mode);
     });
     
-    if (mode === 'record') {
-        actionBtn.textContent = '开始录制';
-        recordsTitle.textContent = '交互记录';
-        ptyPath.textContent = '';
-    } else {
-        actionBtn.textContent = '开始对比';
-        recordsTitle.textContent = '对比记录';
-    }
-    
+    actionBtn.textContent = mode === 'record' ? '开始录制' : '开始对比';
+    ptyPath.textContent = '';
     updateStatus('idle');
 }
 
-// Toggle action
 async function toggleAction() {
     if (state.isRunning) {
         await stop();
@@ -103,16 +71,12 @@ async function toggleAction() {
     }
 }
 
-// Start recording/comparing
 async function start() {
     const port = portSelect.value;
     const baud = parseInt(baudSelect.value);
     
     if (state.mode === 'record') {
-        if (!port) {
-            alert('请选择串口');
-            return;
-        }
+        if (!port) { alert('请选择串口'); return; }
         
         try {
             await window.go.main.App.StartRecording(port, baud);
@@ -139,7 +103,6 @@ async function start() {
     }
 }
 
-// Stop recording/comparing
 async function stop() {
     try {
         if (state.mode === 'record') {
@@ -149,13 +112,7 @@ async function stop() {
         }
         
         state.isRunning = false;
-        
-        if (state.mode === 'record') {
-            actionBtn.textContent = '开始录制';
-        } else {
-            actionBtn.textContent = '开始对比';
-            ptyPath.textContent = '';
-        }
+        actionBtn.textContent = state.mode === 'record' ? '开始录制' : '开始对比';
         actionBtn.classList.remove('stop');
         updateStatus('idle');
     } catch (e) {
@@ -163,10 +120,8 @@ async function stop() {
     }
 }
 
-// Update status indicator
 function updateStatus(status) {
     statusDot.className = 'status-dot';
-    
     switch (status) {
         case 'recording':
             statusDot.classList.add('recording');
@@ -181,7 +136,6 @@ function updateStatus(status) {
     }
 }
 
-// Clear records
 function clearRecords() {
     recordsDiv.innerHTML = '';
     emptyState.style.display = 'flex';
@@ -190,83 +144,65 @@ function clearRecords() {
     statDiff.textContent = '0';
 }
 
-// Add record pair (baseline + compare)
-function addRecordPair(index, baseline, compare, match) {
+function addRecord(direction, data, size) {
     emptyState.style.display = 'none';
     
-    const pair = document.createElement('div');
-    pair.className = 'record-pair';
-    
-    // Baseline row
-    const baselineRow = createRecordRow('基准', baseline, null);
-    pair.appendChild(baselineRow);
-    
-    // Compare row (if in compare mode)
-    if (compare) {
-        const compareRow = createRecordRow('对比', compare, match);
-        pair.appendChild(compareRow);
-    }
-    
-    // Divider
-    const divider = document.createElement('div');
-    divider.className = 'divider';
-    pair.appendChild(divider);
-    
-    recordsDiv.appendChild(pair);
+    const row = document.createElement('div');
+    row.className = 'record-row';
+    row.innerHTML = `
+        <span class="dir ${direction.toLowerCase()}">${direction}</span>
+        <span class="size">${size}B</span>
+        <span class="data">${formatHex(data)}</span>
+    `;
+    recordsDiv.appendChild(row);
     recordsDiv.scrollTop = recordsDiv.scrollHeight;
 }
 
-// Create a single record row
-function createRecordRow(label, record, match) {
-    const row = document.createElement('div');
-    row.className = 'record-row baseline';
+function addCompareLine(expected, actual, match) {
+    emptyState.style.display = 'none';
     
-    const dirClass = record.direction.toLowerCase();
-    const matchIcon = match === true ? '✓' : (match === false ? '✗' : '');
-    const matchClass = match === true ? 'match' : (match === false ? 'diff' : '');
+    // 基准行
+    if (expected) {
+        const baseline = document.createElement('div');
+        baseline.className = 'record-row baseline';
+        baseline.innerHTML = `
+            <span class="label">基准</span>
+            <span class="dir ${expected.direction.toLowerCase()}">${expected.direction}</span>
+            <span class="size">${expected.data.length / 2}B</span>
+            <span class="data">${formatHex(expected.data)}</span>
+        `;
+        recordsDiv.appendChild(baseline);
+    }
     
-    row.innerHTML = `
-        <span class="label">${label}</span>
-        <span class="dir ${dirClass}">${record.direction}</span>
-        <span class="name">${record.name}</span>
-        <span class="data">${formatHex(record.raw_data)}</span>
-        <span class="result ${matchClass}">${matchIcon}</span>
+    // 对比行
+    const compare = document.createElement('div');
+    compare.className = 'record-row compare';
+    const resultIcon = match ? '✓' : '✗';
+    const resultClass = match ? 'match' : 'diff';
+    compare.innerHTML = `
+        <span class="label">对比</span>
+        <span class="dir ${actual.direction.toLowerCase()}">${actual.direction}</span>
+        <span class="size">${actual.data.length / 2}B</span>
+        <span class="data">${formatHex(actual.data)}</span>
+        <span class="result ${resultClass}">${resultIcon}</span>
     `;
+    recordsDiv.appendChild(compare);
     
-    return row;
+    const divider = document.createElement('div');
+    divider.className = 'divider';
+    recordsDiv.appendChild(divider);
+    
+    recordsDiv.scrollTop = recordsDiv.scrollHeight;
 }
 
-// Format hex data
 function formatHex(data) {
     if (!data) return '';
-    
-    // If it's a base64 string, decode it
-    if (typeof data === 'string') {
-        try {
-            // Assume it's already hex formatted or convert
-            return data.length > 64 ? data.substring(0, 64) + '...' : data;
-        } catch (e) {
-            return data;
-        }
-    }
-    
-    // If it's an array
-    if (Array.isArray(data)) {
-        const hex = data.map(b => b.toString(16).padStart(2, '0')).join(' ');
-        return hex.length > 64 ? hex.substring(0, 64) + '...' : hex;
-    }
-    
-    return String(data);
+    return data.length > 64 ? data.substring(0, 64) + '...' : data;
 }
 
-// Update stats
 function updateStats(matched, diff) {
     statMatch.textContent = matched;
     statDiff.textContent = diff;
 }
 
-// Expose functions for backend events
-window.burnscope = {
-    addRecordPair,
-    updateStats
-};
+window.burnscope = { addRecord, addCompareLine, updateStats };
