@@ -2,7 +2,8 @@
 
 let state = {
     mode: 'record',
-    isRunning: false
+    isRunning: false,
+    ptyPath: ''
 };
 
 const portSelect = document.getElementById('port-select');
@@ -58,7 +59,11 @@ function switchMode(mode) {
         tab.classList.toggle('active', tab.dataset.mode === mode);
     });
     
-    actionBtn.textContent = mode === 'record' ? '开始录制' : '开始对比';
+    if (mode === 'record') {
+        actionBtn.textContent = '开始录制';
+    } else {
+        actionBtn.textContent = '开始对比';
+    }
     ptyPath.textContent = '';
     updateStatus('idle');
 }
@@ -76,14 +81,17 @@ async function start() {
     const baud = parseInt(baudSelect.value);
     
     if (state.mode === 'record') {
-        if (!port) { alert('请选择串口'); return; }
+        if (!port) { alert('请选择真实设备串口'); return; }
         
         try {
-            await window.go.main.App.StartRecording(port, baud);
+            // 中间人模式：返回虚拟串口路径
+            const pty = await window.go.main.App.StartRecording(port, baud);
             state.isRunning = true;
+            state.ptyPath = pty;
             actionBtn.textContent = '停止录制';
             actionBtn.classList.add('stop');
             updateStatus('recording');
+            ptyPath.textContent = '虚拟串口: ' + pty;
             clearRecords();
         } catch (e) {
             alert('启动录制失败: ' + e);
@@ -92,6 +100,7 @@ async function start() {
         try {
             const pty = await window.go.main.App.StartCompare();
             state.isRunning = true;
+            state.ptyPath = pty;
             actionBtn.textContent = '停止对比';
             actionBtn.classList.add('stop');
             updateStatus('comparing');
@@ -161,7 +170,6 @@ function addRecord(direction, data, size) {
 function addCompareLine(expected, actual, match) {
     emptyState.style.display = 'none';
     
-    // 基准行
     if (expected) {
         const baseline = document.createElement('div');
         baseline.className = 'record-row baseline';
@@ -174,7 +182,6 @@ function addCompareLine(expected, actual, match) {
         recordsDiv.appendChild(baseline);
     }
     
-    // 对比行
     const compare = document.createElement('div');
     compare.className = 'record-row compare';
     const resultIcon = match ? '✓' : '✗';

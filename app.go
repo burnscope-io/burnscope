@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -16,11 +17,15 @@ import (
 
 // App 应用状态
 type App struct {
-	ctx        context.Context
-	golden     *session.Session
+	ctx context.Context
+
+	// 录制模式
+	pty    *transport.PtyTransport
+	serial *transport.SerialTransport
+	golden *session.Session
+
+	// 对比模式
 	comparator *comparator.Comparator
-	pty        *transport.PtyTransport
-	serial     *transport.SerialTransport
 
 	mu        sync.Mutex
 	isRunning bool
@@ -43,60 +48,130 @@ func (a *App) ListSerialPorts() ([]string, error) {
 	return transport.ListPorts()
 }
 
-// StartRecording 开始录制
-func (a *App) StartRecording(port string, baud int) error {
+// ==================== 录制模式（中间人） ====================
+
+// StartRecording 启动中间人录制
+// devicePort: 真实设备串口 (如 /dev/ttyUSB0)
+// baud: 波特率
+// 返回虚拟串口路径供烧录工具连接
+func (a *App) StartRecording(devicePort string, baud int) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.isRunning {
-		return fmt.Errorf("already running")
+		return "", fmt.Errorf("already running")
 	}
 
-	var err error
-	a.serial, err = transport.NewSerialTransport(port, baud)
+	// 创建 PTY 虚拟串口（给烧录工具用）
+	pty, err := transport.NewPtyTransport()
 	if err != nil {
-		return err
+		return "", fmt.Errorf("create PTY failed: %w", err)
 	}
 
-	a.golden = session.NewSession(port, baud)
+	// 连接真实设备
+	serial, err := transport.NewSerialTransport(devicePort, baud)
+	if err != nil {
+		pty.Close()
+		return "", fmt.Errorf("connect device failed: %w", err)
+	}
+
+	a.pty = pty
+	a.serial = serial
+	a.golden = session.NewSession(devicePort, baud)
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
 
-	go a.recordLoop()
+	// 启动双向转发
+	go a.bridgeLoop()
 
-	return nil
+	return pty.SlavePath(), nil
 }
 
-// recordLoop 录制循环
-func (a *App) recordLoop() {
-	buf := make([]byte, 4096)
+// bridgeLoop 双向桥接循环
+func (a *App) bridgeLoop() {
+	recordChan := make(chan recordEvent, 1000)
+	doneChan := make(chan error, 2)
 
+	// 烧录工具 → 设备 (TX)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			select {
+			case <-a.stopChan:
+				doneChan <- nil
+				return
+			default:
+				n, err := a.pty.Read(buf)
+				if err != nil {
+					doneChan <- err
+					return
+				}
+				if n > 0 {
+					// 转发到设备
+					a.serial.Write(buf[:n])
+
+					// 记录 TX
+					data := make([]byte, n)
+					copy(data, buf[:n])
+					recordChan <- recordEvent{dir: session.TX, data: data}
+				}
+			}
+		}
+	}()
+
+	// 设备 → 烧录工具 (RX)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			select {
+			case <-a.stopChan:
+				doneChan <- nil
+				return
+			default:
+				n, err := a.serial.Read(buf)
+				if err != nil {
+					doneChan <- err
+					return
+				}
+				if n > 0 {
+					// 转发到烧录工具
+					a.pty.Write(buf[:n])
+
+					// 记录 RX
+					data := make([]byte, n)
+					copy(data, buf[:n])
+					recordChan <- recordEvent{dir: session.RX, data: data}
+				}
+			}
+		}
+	}()
+
+	// 记录循环
 	for {
 		select {
 		case <-a.stopChan:
 			return
-		default:
-			n, err := a.serial.Read(buf)
-			if err != nil {
-				time.Sleep(10 * time.Millisecond)
-				continue
+		case err := <-doneChan:
+			if err != nil && err != io.EOF {
+				runtime.EventsEmit(a.ctx, "error", err.Error())
 			}
+			return
+		case evt := <-recordChan:
+			a.golden.Add(evt.dir, evt.data)
 
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-
-				a.golden.Add(session.TX, data)
-
-				// 发送事件到前端
-				runtime.EventsEmit(a.ctx, "record", map[string]interface{}{
-					"direction": "TX",
-					"data":      hex.EncodeToString(data),
-					"size":      n,
-				})
-			}
+			// 发送事件到前端
+			runtime.EventsEmit(a.ctx, "record", map[string]interface{}{
+				"direction": string(evt.dir),
+				"data":      hex.EncodeToString(evt.data),
+				"size":      len(evt.data),
+			})
 		}
 	}
+}
+
+type recordEvent struct {
+	dir  session.Direction
+	data []byte
 }
 
 // StopRecording 停止录制
@@ -111,10 +186,22 @@ func (a *App) StopRecording() error {
 	close(a.stopChan)
 	a.isRunning = false
 
+	var errs []error
+	if a.pty != nil {
+		if err := a.pty.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		a.pty = nil
+	}
 	if a.serial != nil {
-		err := a.serial.Close()
+		if err := a.serial.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		a.serial = nil
-		return err
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %v", errs)
 	}
 	return nil
 }
@@ -155,6 +242,8 @@ func (a *App) GetRecords() []map[string]interface{} {
 	return records
 }
 
+// ==================== 对比模式 ====================
+
 // StartCompare 开始对比
 func (a *App) StartCompare() (string, error) {
 	a.mu.Lock()
@@ -168,19 +257,19 @@ func (a *App) StartCompare() (string, error) {
 		return "", fmt.Errorf("no golden session loaded")
 	}
 
-	var err error
-	a.pty, err = transport.NewPtyTransport()
+	pty, err := transport.NewPtyTransport()
 	if err != nil {
 		return "", err
 	}
 
+	a.pty = pty
 	a.comparator = comparator.NewComparator(a.golden)
 	a.isRunning = true
 	a.stopChan = make(chan struct{})
 
 	go a.compareLoop()
 
-	return a.pty.SlavePath(), nil
+	return pty.SlavePath(), nil
 }
 
 // compareLoop 对比循环
