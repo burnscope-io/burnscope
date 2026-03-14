@@ -227,7 +227,6 @@ func runCompare(input string) {
 	fmt.Println("─────────────────────────────────────────")
 
 	buf := make([]byte, 4096)
-	pos := 0
 	var mu sync.Mutex
 	stopChan := make(chan struct{})
 
@@ -257,30 +256,23 @@ func runCompare(input string) {
 
 				mu.Lock()
 				actual := &session.Record{
-					Index:     pos + 1,
 					Direction: session.TX,
 					Data:      data,
 				}
 				result := cmp.Compare(actual)
-				pos++
 
 				// 打印对比结果
-				if result.Expected != nil {
-					fmt.Printf("基准: [%s] %s\n", result.Expected.Direction, formatHex(result.Expected.Data, 32))
+				if result.ExpectedTX != nil {
+					fmt.Printf("基准: [TX] %s\n", formatHex(result.ExpectedTX.Data, 32))
 				}
 				fmt.Printf("对比: [TX] %s %s\n", formatHex(data, 32), result.Result)
-				fmt.Println("─────────────────────────────────────────")
 
-				// 返回响应
-				if result.Expected != nil && pos < len(golden.Records) {
-					next := golden.Records[pos]
-					if next.Direction == session.RX {
-						pty.Write(next.Data)
-						fmt.Printf("[回放] [RX] %s\n", formatHex(next.Data, 32))
-						fmt.Println("─────────────────────────────────────────")
-						pos++
-					}
+				// 回放 RX
+				if result.ExpectedRX != nil {
+					pty.Write(result.ExpectedRX.Data)
+					fmt.Printf("回放: [RX] %s\n", formatHex(result.ExpectedRX.Data, 32))
 				}
+				fmt.Println("─────────────────────────────────────────")
 				mu.Unlock()
 			}
 		}

@@ -275,7 +275,6 @@ func (a *App) StartCompare() (string, error) {
 // compareLoop 对比循环
 func (a *App) compareLoop() {
 	buf := make([]byte, 4096)
-	pos := 0
 
 	for {
 		select {
@@ -294,30 +293,28 @@ func (a *App) compareLoop() {
 
 				// 创建对比记录
 				actual := &session.Record{
-					Index:     pos + 1,
 					Direction: session.TX,
 					Data:      data,
 				}
 
 				// 执行对比
 				result := a.comparator.Compare(actual)
-				pos++
 
 				// 发送事件到前端
 				runtime.EventsEmit(a.ctx, "compare", map[string]interface{}{
 					"index":    result.Index,
-					"expected": formatRecord(result.Expected),
-					"actual":   formatRecord(result.Actual),
+					"expected": formatRecord(result.ExpectedTX),
+					"actual":   formatRecord(actual),
 					"match":    result.Result == comparator.Match,
 				})
 
-				// 如果基准有对应的响应，返回响应
-				if result.Expected != nil && pos < len(a.golden.Records) {
-					next := a.golden.Records[pos]
-					if next.Direction == session.RX {
-						a.pty.Write(next.Data)
-						pos++
-					}
+				// 回放 RX 响应
+				if result.ExpectedRX != nil {
+					a.pty.Write(result.ExpectedRX.Data)
+					runtime.EventsEmit(a.ctx, "replay", map[string]interface{}{
+						"direction": "RX",
+						"data":      hex.EncodeToString(result.ExpectedRX.Data),
+					})
 				}
 
 				// 更新统计
