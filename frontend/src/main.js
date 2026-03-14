@@ -1,4 +1,7 @@
-// burnscope frontend
+// burnscope frontend - ES Module
+
+import * as App from '../wailsjs/go/main/App.js';
+import { EventsOn } from '../wailsjs/runtime/runtime.js';
 
 let state = {
     isRunning: false,
@@ -7,24 +10,17 @@ let state = {
     lowerPort: ''
 };
 
-// Initialize - 延迟调用确保 Wails 绑定准备好
+// Initialize
 window.addEventListener('load', async () => {
     console.log('window.load event');
     
-    // 等待 Wails 绑定准备好
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
     // 监听事件
-    if (window.runtime && window.runtime.EventsOn) {
-        window.runtime.EventsOn('data', onData);
-        window.runtime.EventsOn('compare', onCompare);
-        window.runtime.EventsOn('replay', onReplay);
-        window.runtime.EventsOn('stats', onStats);
-        window.runtime.EventsOn('error', onError);
-        console.log('Events registered');
-    } else {
-        console.error('window.runtime not available');
-    }
+    EventsOn('data', onData);
+    EventsOn('compare', onCompare);
+    EventsOn('replay', onReplay);
+    EventsOn('stats', onStats);
+    EventsOn('error', onError);
+    console.log('Events registered');
     
     // 初始化端口
     await initPorts();
@@ -36,22 +32,10 @@ window.addEventListener('load', async () => {
 
 // 初始化端口
 async function initPorts() {
-    console.log('initPorts: starting...');
-    
-    // 检查 Wails 绑定
-    if (!window.go || !window.go.main || !window.go.main.App) {
-        console.error('Wails bindings not ready');
-        document.getElementById('upper-port').textContent = 'Wails 未就绪';
-        document.getElementById('upper-port').style.color = '#f85149';
-        document.getElementById('lower-port').textContent = 'Wails 未就绪';
-        document.getElementById('lower-port').style.color = '#f85149';
-        return;
-    }
-    
+    console.log('initPorts: calling App.InitPorts...');
     try {
-        console.log('Calling App.InitPorts...');
-        const ports = await window.go.main.App.InitPorts();
-        console.log('InitPorts returned:', ports, typeof ports);
+        const ports = await App.InitPorts();
+        console.log('InitPorts returned:', ports);
         
         if (ports && ports.upper && ports.lower) {
             state.upperPort = ports.upper;
@@ -62,7 +46,7 @@ async function initPorts() {
             console.error('InitPorts returned null');
             document.getElementById('upper-port').textContent = '返回 null';
             document.getElementById('upper-port').style.color = '#f85149';
-            document.getElementById('lower-port').textContent = 'PTY 创建失败?';
+            document.getElementById('lower-port').textContent = 'PTY 创建失败';
             document.getElementById('lower-port').style.color = '#f85149';
         } else {
             console.error('InitPorts returned invalid:', ports);
@@ -91,21 +75,19 @@ function updatePorts() {
 // 加载物理串口
 async function loadPhysicalPorts() {
     try {
-        if (window.go && window.go.main && window.go.main.App) {
-            const ports = await window.go.main.App.ListSerialPorts();
-            const select = document.getElementById('physical-port');
-            if (select) {
-                select.innerHTML = '';
-                if (ports.length === 0) {
-                    select.innerHTML = '<option value="">无物理串口</option>';
-                } else {
-                    ports.forEach(port => {
-                        const opt = document.createElement('option');
-                        opt.value = port;
-                        opt.textContent = port;
-                        select.appendChild(opt);
-                    });
-                }
+        const ports = await App.ListSerialPorts();
+        const select = document.getElementById('physical-port');
+        if (select) {
+            select.innerHTML = '';
+            if (ports.length === 0) {
+                select.innerHTML = '<option value="">无物理串口</option>';
+            } else {
+                ports.forEach(port => {
+                    const opt = document.createElement('option');
+                    opt.value = port;
+                    opt.textContent = port;
+                    select.appendChild(opt);
+                });
             }
         }
     } catch (e) {
@@ -151,7 +133,7 @@ async function start() {
     try {
         switch (state.lowerType) {
             case 'virtual':
-                await window.go.main.App.StartSimulate();
+                await App.StartSimulate();
                 break;
             case 'physical':
                 const port = document.getElementById('physical-port').value;
@@ -160,10 +142,10 @@ async function start() {
                     alert('请选择物理串口');
                     return;
                 }
-                await window.go.main.App.StartRecord(port, baud);
+                await App.StartRecord(port, baud);
                 break;
             case 'compare':
-                await window.go.main.App.StartCompare();
+                await App.StartCompare();
                 break;
         }
         
@@ -175,14 +157,14 @@ async function start() {
         clearRecords();
         
     } catch (e) {
-        alert('���动失败: ' + e);
+        alert('启动失败: ' + e);
     }
 }
 
 // 停止
 async function stop() {
     try {
-        await window.go.main.App.Stop();
+        await App.Stop();
         
         state.isRunning = false;
         const btn = document.getElementById('action-btn');
@@ -201,7 +183,7 @@ async function stop() {
 async function saveSession() {
     const file = document.getElementById('golden-file').value || 'session.golden';
     try {
-        await window.go.main.App.SaveSession(file);
+        await App.SaveSession(file);
         alert('已保存: ' + file);
     } catch (e) {
         alert('保存失败: ' + e);
@@ -212,7 +194,7 @@ async function saveSession() {
 async function loadGolden() {
     const file = document.getElementById('golden-file').value || 'session.golden';
     try {
-        await window.go.main.App.LoadSession(file);
+        await App.LoadSession(file);
         document.getElementById('golden-info').textContent = '已加载';
     } catch (e) {
         alert('加载失败: ' + e);
@@ -334,4 +316,4 @@ window.saveSession = saveSession;
 window.loadGolden = loadGolden;
 window.copyPort = copyPort;
 
-console.log('main.js loaded');
+console.log('main.js loaded as module');
