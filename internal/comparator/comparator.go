@@ -39,9 +39,10 @@ type LineResult struct {
 
 // Comparator 对比器
 type Comparator struct {
-	golden   *session.Session
-	position int
-	results  []LineResult
+	golden      *session.Session
+	position    int
+	results     []LineResult
+	ignoreBytes map[string]bool // 命令中需要忽略的字节位置
 }
 
 // NewComparator 创建对比器
@@ -50,6 +51,9 @@ func NewComparator(golden *session.Session) *Comparator {
 		golden:   golden,
 		position: 0,
 		results:  make([]LineResult, 0),
+		ignoreBytes: map[string]bool{
+			// 序列号等动态字段在协议解析时处理
+		},
 	}
 }
 
@@ -88,8 +92,8 @@ func (c *Comparator) Compare(actual *session.Record) LineResult {
 		return result
 	}
 
-	// 对比数据
-	if !bytes.Equal(actual.RawData, expected.RawData) {
+	// 对比数据（使用智能匹配）
+	if !c.compareData(expected, actual) {
 		result.Result = Diff
 		result.Message = fmt.Sprintf("数据不匹配: 期望 %d 字节, 实际 %d 字节", len(expected.RawData), len(actual.RawData))
 		c.results = append(c.results, result)
@@ -102,6 +106,18 @@ func (c *Comparator) Compare(actual *session.Record) LineResult {
 	c.results = append(c.results, result)
 	c.position++
 	return result
+}
+
+// compareData 智能对比数据
+func (c *Comparator) compareData(expected, actual *session.Record) bool {
+	// 长度必须匹配
+	if len(expected.RawData) != len(actual.RawData) {
+		return false
+	}
+
+	// 原始字节对比
+	// TODO: 未来可以根据命令类型忽略动态字段（如序列号）
+	return bytes.Equal(expected.RawData, actual.RawData)
 }
 
 // Stats 获取统计
@@ -129,7 +145,7 @@ func (c *Comparator) GetResults() []LineResult {
 	return c.results
 }
 
-// IsComplete 检查是否完成
+// IsComplete 检查是否完��
 func (c *Comparator) IsComplete() bool {
 	return c.position >= len(c.golden.Records)
 }
@@ -137,4 +153,16 @@ func (c *Comparator) IsComplete() bool {
 // Progress 获取进度
 func (c *Comparator) Progress() (current, total int) {
 	return c.position, len(c.golden.Records)
+}
+
+// SetPosition 设置位置（用于跳过某些记录）
+func (c *Comparator) SetPosition(pos int) {
+	if pos >= 0 && pos <= len(c.golden.Records) {
+		c.position = pos
+	}
+}
+
+// Remaining 获取剩余待对比数量
+func (c *Comparator) Remaining() int {
+	return len(c.golden.Records) - c.position
 }

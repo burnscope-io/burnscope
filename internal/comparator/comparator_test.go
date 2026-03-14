@@ -144,3 +144,59 @@ func TestResultString(t *testing.T) {
 		}
 	}
 }
+
+func TestComparatorRemaining(t *testing.T) {
+	golden := session.NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	golden.AddRawData(protocol.TX, []byte{0x01})
+	golden.AddRawData(protocol.RX, []byte{0x02})
+	golden.AddRawData(protocol.TX, []byte{0x03})
+
+	c := NewComparator(golden)
+
+	if c.Remaining() != 3 {
+		t.Errorf("Remaining() = %d, want 3", c.Remaining())
+	}
+
+	c.Compare(testRecord("TX", "RAW", []byte{0x01}))
+	if c.Remaining() != 2 {
+		t.Errorf("Remaining() = %d, want 2", c.Remaining())
+	}
+}
+
+func TestComparatorSetPosition(t *testing.T) {
+	golden := session.NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	golden.AddRawData(protocol.TX, []byte{0x01})
+	golden.AddRawData(protocol.RX, []byte{0x02})
+	golden.AddRawData(protocol.TX, []byte{0x03})
+
+	c := NewComparator(golden)
+
+	c.SetPosition(2)
+	if c.position != 2 {
+		t.Errorf("position = %d, want 2", c.position)
+	}
+
+	// 测试边界
+	c.SetPosition(-1)
+	if c.position != 2 {
+		t.Errorf("position should not change for negative value")
+	}
+
+	c.SetPosition(100)
+	if c.position != 2 {
+		t.Errorf("position should not change for out of range value")
+	}
+}
+
+func TestComparatorGetResults(t *testing.T) {
+	golden := session.NewSession("/dev/ttyUSB0", 115200, "ESP-FLASH")
+	golden.AddRawData(protocol.TX, []byte{0x01})
+
+	c := NewComparator(golden)
+	c.Compare(testRecord("TX", "RAW", []byte{0x01}))
+
+	results := c.GetResults()
+	if len(results) != 1 {
+		t.Errorf("len(results) = %d, want 1", len(results))
+	}
+}
