@@ -25,27 +25,6 @@
         }
         .header h1 { font-size: 18px; font-weight: 600; color: #58a6ff; }
         
-        .mode-tabs {
-            display: flex;
-            gap: 4px;
-            background: #21262d;
-            padding: 4px;
-            border-radius: 8px;
-        }
-        .mode-tab {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            background: transparent;
-            color: #8b949e;
-            transition: all 0.2s;
-        }
-        .mode-tab:hover { color: #c9d1d9; }
-        .mode-tab.active { background: #0d1117; color: #58a6ff; }
-        
         .status {
             margin-left: auto;
             font-size: 13px;
@@ -61,21 +40,49 @@
         .content { flex: 1; display: flex; overflow: hidden; }
         
         .sidebar {
-            width: 300px;
+            width: 320px;
             background: #161b22;
             border-right: 1px solid #30363d;
             display: flex;
             flex-direction: column;
         }
-        .sidebar-header {
+        
+        .section {
             padding: 16px;
             border-bottom: 1px solid #30363d;
-            font-size: 13px;
+        }
+        .section-title {
+            font-size: 12px;
             font-weight: 600;
             color: #8b949e;
+            margin-bottom: 12px;
+            text-transform: uppercase;
         }
         
-        .config-section { padding: 16px; }
+        .port-display {
+            background: #0d1117;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .port-label {
+            font-size: 11px;
+            color: #8b949e;
+            margin-bottom: 4px;
+        }
+        .port-value {
+            font-size: 16px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            color: #58a6ff;
+            cursor: pointer;
+        }
+        .port-value:hover { color: #79c0ff; }
+        .port-hint {
+            font-size: 10px;
+            color: #484f58;
+            margin-top: 4px;
+        }
+        
         .config-row { margin-bottom: 12px; }
         .config-label { font-size: 12px; color: #8b949e; margin-bottom: 6px; }
         select, input {
@@ -85,72 +92,28 @@
             border-radius: 6px;
             background: #0d1117;
             color: #c9d1d9;
-            font-size: 14px;
+            font-size: 13px;
         }
         select:focus, input:focus { outline: none; border-color: #58a6ff; }
         
         .actions { padding: 16px; margin-top: auto; }
-        button.primary {
+        button {
             width: 100%;
             padding: 12px;
             border: none;
             border-radius: 8px;
-            background: #238636;
-            color: white;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
+            margin-bottom: 8px;
         }
+        button.primary { background: #238636; color: white; }
         button.primary:hover { background: #2ea043; }
         button.primary.stop { background: #f85149; }
-        button.primary.stop:hover { background: #da3633; }
+        button.secondary { background: #21262d; color: #c9d1d9; }
+        button.secondary:hover { background: #30363d; }
         
         .main-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        
-        /* 代理串口显示 */
-        .proxy-display {
-            background: #161b22;
-            border-bottom: 1px solid #30363d;
-            padding: 20px;
-            text-align: center;
-        }
-        .proxy-label { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
-        .proxy-path {
-            font-size: 24px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            color: #58a6ff;
-            background: #0d1117;
-            padding: 12px 20px;
-            border-radius: 8px;
-            display: inline-block;
-            cursor: pointer;
-        }
-        .proxy-path:hover { background: #21262d; }
-        .proxy-hint { font-size: 11px; color: #484f58; margin-top: 8px; }
-        
-        /* 双串口显示 */
-        .dual-ports {
-            display: flex;
-            gap: 20px;
-            padding: 20px;
-            background: #161b22;
-            border-bottom: 1px solid #30363d;
-        }
-        .port-box {
-            flex: 1;
-            text-align: center;
-            background: #0d1117;
-            padding: 16px;
-            border-radius: 8px;
-        }
-        .port-box .label { font-size: 11px; color: #8b949e; margin-bottom: 8px; }
-        .port-box .path {
-            font-size: 18px;
-            font-family: 'Monaco', 'Menlo', monospace;
-            color: #58a6ff;
-            cursor: pointer;
-        }
-        .port-box .path:hover { color: #79c0ff; }
         
         .records-header {
             padding: 12px 16px;
@@ -158,7 +121,10 @@
             border-bottom: 1px solid #30363d;
             font-size: 13px;
             color: #8b949e;
+            display: flex;
+            justify-content: space-between;
         }
+        
         .records { flex: 1; overflow-y: auto; padding: 8px 0; font-family: 'Monaco', 'Menlo', monospace; font-size: 12px; }
         
         .record-row {
@@ -175,18 +141,16 @@
         .record-row .result { width: 24px; text-align: center; }
         .record-row .result.match { color: #238636; }
         .record-row .result.diff { color: #f85149; }
-        
-        .divider { height: 1px; background: #21262d; margin: 4px 16px; }
+        .record-row.replay { background: #161b22; }
         
         .footer {
             padding: 12px 20px;
             background: #161b22;
             border-top: 1px solid #30363d;
             display: flex;
-            justify-content: space-between;
+            gap: 24px;
             font-size: 13px;
         }
-        .footer .stats { display: flex; gap: 24px; }
         .footer .stat { color: #8b949e; }
         .footer .stat-value { font-weight: 600; margin-left: 8px; }
         .footer .stat-value.match { color: #238636; }
@@ -200,19 +164,11 @@
             justify-content: center;
             color: #484f58;
         }
-        .empty-state p { font-size: 14px; margin-top: 16px; }
-        
-        .hidden { display: none !important; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>burnscope</h1>
-        <div class="mode-tabs">
-            <button class="mode-tab active" data-mode="record">录制</button>
-            <button class="mode-tab" data-mode="test">测试</button>
-            <button class="mode-tab" data-mode="compare">对比</button>
-        </div>
         <div class="status">
             <span class="status-dot" id="status-dot"></span>
             <span id="status-text">就绪</span>
@@ -221,71 +177,73 @@
     
     <div class="content">
         <div class="sidebar">
-            <div class="sidebar-header">配置</div>
+            <!-- 上位串口 -->
+            <div class="section">
+                <div class="section-title">上位串口（代理）</div>
+                <div class="port-display">
+                    <div class="port-label">烧录工具连接此端口</div>
+                    <div class="port-value" id="upper-port" onclick="copyPort('upper')">初始化中...</div>
+                    <div class="port-hint">点击复制</div>
+                </div>
+            </div>
             
-            <!-- 录制模式配置 -->
-            <div class="config-section" id="record-config">
+            <!-- 下位串口 -->
+            <div class="section">
+                <div class="section-title">下位串口（目标）</div>
                 <div class="config-row">
-                    <div class="config-label">真实设备串口（可选）</div>
-                    <select id="device-port">
-                        <option value="">等待自动连接...</option>
+                    <div class="config-label">选择类型</div>
+                    <select id="lower-type" onchange="onLowerTypeChange()">
+                        <option value="virtual">虚拟串口（测试）</option>
+                        <option value="physical">物理串口（录制）</option>
+                        <option value="compare">基准对比</option>
                     </select>
                 </div>
-                <div class="config-row">
-                    <div class="config-label">波特率（可选，自动捕获）</div>
-                    <select id="baud-rate">
-                        <option value="0">自动捕获</option>
-                        <option value="115200">115200</option>
-                        <option value="230400">230400</option>
-                        <option value="460800">460800</option>
-                        <option value="921600">921600</option>
-                    </select>
+                <div id="virtual-config">
+                    <div class="port-display">
+                        <div class="port-label">测试程序连接此端口</div>
+                        <div class="port-value" id="lower-port" onclick="copyPort('lower')">初始化中...</div>
+                        <div class="port-hint">点击复制</div>
+                    </div>
+                </div>
+                <div id="physical-config" style="display:none;">
+                    <div class="config-row">
+                        <div class="config-label">物理串口</div>
+                        <select id="physical-port"></select>
+                    </div>
+                    <div class="config-row">
+                        <div class="config-label">波特率</div>
+                        <select id="baud-rate">
+                            <option value="115200">115200</option>
+                            <option value="230400">230400</option>
+                            <option value="460800">460800</option>
+                            <option value="921600">921600</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="compare-config" style="display:none;">
+                    <div class="config-row">
+                        <div class="config-label">基准文件</div>
+                        <input type="text" id="golden-file" value="session.golden">
+                    </div>
+                    <div class="config-row">
+                        <button class="secondary" onclick="loadGolden()">加载基准</button>
+                    </div>
+                    <div id="golden-info" style="font-size:12px;color:#8b949e;"></div>
                 </div>
             </div>
             
-            <!-- 测试模式配置 -->
-            <div class="config-section hidden" id="test-config">
-                <p style="color: #8b949e; font-size: 13px;">
-                    创建两个虚拟串口：<br>
-                    • 代理串口：烧录工具连接<br>
-                    • 测试串口：测试程序连接
-                </p>
-            </div>
-            
-            <!-- 对比模式配置 -->
-            <div class="config-section hidden" id="compare-config">
-                <div class="config-row">
-                    <div class="config-label">基准文件</div>
-                    <input type="text" id="golden-file" value="session.golden" placeholder="session.golden">
-                </div>
-            </div>
-            
+            <!-- 操作 -->
             <div class="actions">
-                <button class="primary" id="action-btn">开始录制</button>
+                <button class="primary" id="action-btn" onclick="toggleAction()">开始</button>
+                <button class="secondary" onclick="saveSession()">保存录制</button>
             </div>
         </div>
         
         <div class="main-panel">
-            <!-- 单串口显示 -->
-            <div class="proxy-display" id="proxy-single">
-                <div class="proxy-label">代理串口（烧录工具连接此端口）</div>
-                <div class="proxy-path" id="proxy-path" onclick="copyPath()">-</div>
-                <div class="proxy-hint">点击复制</div>
+            <div class="records-header">
+                <span>数据流</span>
+                <span id="baud-display"></span>
             </div>
-            
-            <!-- 双串口显示（测试模式） -->
-            <div class="dual-ports hidden" id="proxy-dual">
-                <div class="port-box">
-                    <div class="label">代理串口（烧录工具）</div>
-                    <div class="path" id="proxy-path-1" onclick="copyPath('proxy-path-1')">-</div>
-                </div>
-                <div class="port-box">
-                    <div class="label">测试串口（测试程序）</div>
-                    <div class="path" id="proxy-path-2" onclick="copyPath('proxy-path-2')">-</div>
-                </div>
-            </div>
-            
-            <div class="records-header">数据流</div>
             <div class="records" id="records">
                 <div class="empty-state" id="empty-state">
                     <p>等待数据...</p>
@@ -295,13 +253,10 @@
     </div>
     
     <div class="footer">
-        <div class="stats">
-            <span class="stat">TX: <span class="stat-value" id="stat-tx">0</span></span>
-            <span class="stat">RX: <span class="stat-value" id="stat-rx">0</span></span>
-            <span class="stat">匹配: <span class="stat-value match" id="stat-match">0</span></span>
-            <span class="stat">差异: <span class="stat-value diff" id="stat-diff">0</span></span>
-        </div>
-        <div class="stat" id="baud-display"></div>
+        <span class="stat">TX: <span class="stat-value" id="stat-tx">0</span></span>
+        <span class="stat">RX: <span class="stat-value" id="stat-rx">0</span></span>
+        <span class="stat">匹配: <span class="stat-value match" id="stat-match">0</span></span>
+        <span class="stat">差异: <span class="stat-value diff" id="stat-diff">0</span></span>
     </div>
     
     <script src="./src/main.js"></script>

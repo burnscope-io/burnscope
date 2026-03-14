@@ -2,117 +2,84 @@
 
 let runtime;
 let state = {
-    mode: 'record',
-    isRunning: false
+    isRunning: false,
+    lowerType: 'virtual',
+    upperPort: '',
+    lowerPort: ''
 };
-
-// DOM Elements
-const modeTabs = document.querySelectorAll('.mode-tab');
-const actionBtn = document.getElementById('action-btn');
-const statusDot = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
-const recordsDiv = document.getElementById('records');
-const emptyState = document.getElementById('empty-state');
-const proxySingle = document.getElementById('proxy-single');
-const proxyDual = document.getElementById('proxy-dual');
-const proxyPath = document.getElementById('proxy-path');
-const proxyPath1 = document.getElementById('proxy-path-1');
-const proxyPath2 = document.getElementById('proxy-path-2');
-const baudDisplay = document.getElementById('baud-display');
-
-const recordConfig = document.getElementById('record-config');
-const testConfig = document.getElementById('test-config');
-const compareConfig = document.getElementById('compare-config');
-
-const devicePort = document.getElementById('device-port');
-const baudRate = document.getElementById('baud-rate');
-const goldenFile = document.getElementById('golden-file');
-
-const statTx = document.getElementById('stat-tx');
-const statRx = document.getElementById('stat-rx');
-const statMatch = document.getElementById('stat-match');
-const statDiff = document.getElementById('stat-diff');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
     runtime = window['@wailsapp/runtime'];
     
-    // Load serial ports
-    await loadPorts();
-    
-    // Mode tabs
-    modeTabs.forEach(tab => {
-        tab.addEventListener('click', () => switchMode(tab.dataset.mode));
-    });
-    
-    // Action button
-    actionBtn.addEventListener('click', toggleAction);
-    
-    // Listen for events
-    runtime.EventsOn('record', onRecord);
+    // 监听事件
+    runtime.EventsOn('ports_ready', onPortsReady);
+    runtime.EventsOn('data', onData);
     runtime.EventsOn('compare', onCompare);
-    runtime.EventsOn('replay', onReplay);
     runtime.EventsOn('stats', onStats);
-    runtime.EventsOn('connected', onConnected);
     runtime.EventsOn('error', onError);
     
-    // Refresh ports periodically
-    setInterval(loadPorts, 3000);
+    // 获取端口
+    try {
+        state.upperPort = await window.go.main.App.GetUpperPort();
+        state.lowerPort = await window.go.main.App.GetLowerPort();
+        updatePorts();
+    } catch (e) {
+        console.error('Get ports failed:', e);
+    }
+    
+    // 加载物理串口列表
+    await loadPhysicalPorts();
+    setInterval(loadPhysicalPorts, 3000);
 });
 
-// Load serial ports
-async function loadPorts() {
+// 更新端口显示
+function updatePorts() {
+    document.getElementById('upper-port').textContent = state.upperPort || '初始化中...';
+    document.getElementById('lower-port').textContent = state.lowerPort || '初始化中...';
+}
+
+// 加载物理串口
+async function loadPhysicalPorts() {
     try {
         const ports = await window.go.main.App.ListSerialPorts();
-        devicePort.innerHTML = '<option value="">等待自动连接...</option>';
+        const select = document.getElementById('physical-port');
+        select.innerHTML = '';
         ports.forEach(port => {
             const opt = document.createElement('option');
             opt.value = port;
             opt.textContent = port;
-            devicePort.appendChild(opt);
+            select.appendChild(opt);
         });
     } catch (e) {
-        console.error('Failed to load ports:', e);
+        console.error('Load ports failed:', e);
     }
 }
 
-// Switch mode
-function switchMode(mode) {
-    if (state.isRunning) return;
+// 下位类型变化
+function onLowerTypeChange() {
+    state.lowerType = document.getElementById('lower-type').value;
     
-    state.mode = mode;
+    document.getElementById('virtual-config').style.display = state.lowerType === 'virtual' ? 'block' : 'none';
+    document.getElementById('physical-config').style.display = state.lowerType === 'physical' ? 'block' : 'none';
+    document.getElementById('compare-config').style.display = state.lowerType === 'compare' ? 'block' : 'none';
     
-    modeTabs.forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.mode === mode);
-    });
-    
-    // Show/hide config sections
-    recordConfig.classList.toggle('hidden', mode !== 'record');
-    testConfig.classList.toggle('hidden', mode !== 'test');
-    compareConfig.classList.toggle('hidden', mode !== 'compare');
-    
-    // Update button text
-    switch (mode) {
-        case 'record':
-            actionBtn.textContent = '开始录制';
+    // 更新按钮文本
+    const btn = document.getElementById('action-btn');
+    switch (state.lowerType) {
+        case 'virtual':
+            btn.textContent = '开始模拟';
             break;
-        case 'test':
-            actionBtn.textContent = '开始测试';
+        case 'physical':
+            btn.textContent = '开始录制';
             break;
         case 'compare':
-            actionBtn.textContent = '开始对比';
+            btn.textContent = '开始对比';
             break;
     }
-    
-    // Reset display
-    proxySingle.classList.remove('hidden');
-    proxyDual.classList.add('hidden');
-    proxyPath.textContent = '-';
-    clearRecords();
-    updateStatus('idle');
 }
 
-// Toggle action
+// 开始/停止
 async function toggleAction() {
     if (state.isRunning) {
         await stop();
@@ -121,178 +88,129 @@ async function toggleAction() {
     }
 }
 
-// Start
+// 开始
 async function start() {
+    const btn = document.getElementById('action-btn');
+    
     try {
-        clearRecords();
-        
-        switch (state.mode) {
-            case 'record':
-                await startRecord();
+        switch (state.lowerType) {
+            case 'virtual':
+                await window.go.main.App.StartSimulate();
                 break;
-            case 'test':
-                await startTest();
+            case 'physical':
+                const port = document.getElementById('physical-port').value;
+                const baud = parseInt(document.getElementById('baud-rate').value);
+                await window.go.main.App.StartRecord(port, baud);
                 break;
             case 'compare':
-                await startCompare();
+                await window.go.main.App.StartCompare();
                 break;
         }
+        
+        state.isRunning = true;
+        btn.textContent = '停止';
+        btn.classList.add('stop');
+        document.getElementById('status-dot').classList.add('running');
+        document.getElementById('status-text').textContent = '运行中';
+        clearRecords();
+        
     } catch (e) {
         alert('启动失败: ' + e);
     }
 }
 
-// Start record mode
-async function startRecord() {
-    const port = devicePort.value;
-    const baud = parseInt(baudRate.value) || 0;
-    
-    const proxy = await window.go.main.App.StartRecord(port);
-    
-    state.isRunning = true;
-    actionBtn.textContent = '停止';
-    actionBtn.classList.add('stop');
-    updateStatus('running');
-    
-    proxySingle.classList.remove('hidden');
-    proxyDual.classList.add('hidden');
-    proxyPath.textContent = proxy;
-    
-    // If device port specified and baud set, connect
-    if (port && baud > 0) {
-        await window.go.main.App.ConnectDevice(port, baud);
-        baudDisplay.textContent = `波特率: ${baud}`;
-    } else {
-        baudDisplay.textContent = '等待捕获波特率...';
-    }
-}
-
-// Start test mode
-async function startTest() {
-    const [proxy1, proxy2] = await window.go.main.App.StartTest();
-    
-    state.isRunning = true;
-    actionBtn.textContent = '停止';
-    actionBtn.classList.add('stop');
-    updateStatus('running');
-    
-    proxySingle.classList.add('hidden');
-    proxyDual.classList.remove('hidden');
-    proxyPath1.textContent = proxy1;
-    proxyPath2.textContent = proxy2;
-    baudDisplay.textContent = '';
-}
-
-// Start compare mode
-async function startCompare() {
-    const file = goldenFile.value || 'session.golden';
-    
-    // Try to load session first
-    try {
-        await window.go.main.App.LoadSession(file);
-    } catch (e) {
-        alert('加载基准文件失败: ' + e);
-        return;
-    }
-    
-    const proxy = await window.go.main.App.StartCompare();
-    
-    state.isRunning = true;
-    actionBtn.textContent = '停止';
-    actionBtn.classList.add('stop');
-    updateStatus('running');
-    
-    proxySingle.classList.remove('hidden');
-    proxyDual.classList.add('hidden');
-    proxyPath.textContent = proxy;
-    baudDisplay.textContent = '';
-}
-
-// Stop
+// 停止
 async function stop() {
     try {
         await window.go.main.App.Stop();
         
         state.isRunning = false;
-        actionBtn.classList.remove('stop');
-        baudDisplay.textContent = '';
+        const btn = document.getElementById('action-btn');
+        btn.classList.remove('stop');
+        onLowerTypeChange(); // 恢复按钮文本
         
-        switch (state.mode) {
-            case 'record':
-                actionBtn.textContent = '开始录制';
-                // Prompt to save
-                if (confirm('是否保存录制数据？')) {
-                    const path = goldenFile.value || 'session.golden';
-                    await window.go.main.App.SaveSession(path);
-                    alert('已保存: ' + path);
-                }
-                break;
-            case 'test':
-                actionBtn.textContent = '开始测试';
-                break;
-            case 'compare':
-                actionBtn.textContent = '开始对比';
-                break;
-        }
+        document.getElementById('status-dot').classList.remove('running');
+        document.getElementById('status-text').textContent = '就绪';
         
-        updateStatus('idle');
     } catch (e) {
         console.error('Stop failed:', e);
     }
 }
 
-// Update status
-function updateStatus(status) {
-    statusDot.className = 'status-dot';
-    if (status === 'running') {
-        statusDot.classList.add('running');
-        statusText.textContent = '运行中';
-    } else {
-        statusText.textContent = '就绪';
+// 保存录制
+async function saveSession() {
+    const file = document.getElementById('golden-file').value || 'session.golden';
+    try {
+        await window.go.main.App.SaveSession(file);
+        alert('已保存: ' + file);
+    } catch (e) {
+        alert('保存失败: ' + e);
     }
 }
 
-// Clear records
-function clearRecords() {
-    recordsDiv.innerHTML = '';
-    emptyState.style.display = 'flex';
-    recordsDiv.appendChild(emptyState);
-    statTx.textContent = '0';
-    statRx.textContent = '0';
-    statMatch.textContent = '0';
-    statDiff.textContent = '0';
+// 加载基准
+async function loadGolden() {
+    const file = document.getElementById('golden-file').value || 'session.golden';
+    try {
+        const count = await window.go.main.App.LoadSession(file);
+        document.getElementById('golden-info').textContent = `已加载: ${count} 条记录`;
+    } catch (e) {
+        alert('加载失败: ' + e);
+    }
 }
 
-// On record event
-function onRecord(data) {
-    emptyState.style.display = 'none';
+// 清空记录
+function clearRecords() {
+    const records = document.getElementById('records');
+    records.innerHTML = '<div class="empty-state" id="empty-state"><p>等待数据...</p></div>';
+    document.getElementById('stat-tx').textContent = '0';
+    document.getElementById('stat-rx').textContent = '0';
+    document.getElementById('stat-match').textContent = '0';
+    document.getElementById('stat-diff').textContent = '0';
+}
+
+// 端口就绪
+function onPortsReady(data) {
+    state.upperPort = data.upper;
+    state.lowerPort = data.lower;
+    updatePorts();
+}
+
+// 数据事件
+function onData(data) {
+    const records = document.getElementById('records');
+    document.getElementById('empty-state').style.display = 'none';
     
     const row = document.createElement('div');
     row.className = 'record-row';
+    if (data.replay) row.classList.add('replay');
     
     const dirClass = data.direction.toLowerCase();
     row.innerHTML = `
         <span class="dir ${dirClass}">${data.direction}</span>
         <span class="size">${data.size}B</span>
-        <span class="data">${truncateHex(data.data, 48)}</span>
+        <span class="data">${truncateHex(data.data, 48)}${data.replay ? ' (回放)' : ''}</span>
     `;
     
-    recordsDiv.appendChild(row);
-    recordsDiv.scrollTop = recordsDiv.scrollHeight;
+    records.appendChild(row);
+    records.scrollTop = records.scrollHeight;
     
-    // Update counters
+    // 更新统计
     if (data.direction === 'TX') {
-        statTx.textContent = parseInt(statTx.textContent) + 1;
+        const el = document.getElementById('stat-tx');
+        el.textContent = parseInt(el.textContent) + 1;
     } else {
-        statRx.textContent = parseInt(statRx.textContent) + 1;
+        const el = document.getElementById('stat-rx');
+        el.textContent = parseInt(el.textContent) + 1;
     }
 }
 
-// On compare event
+// 对比事件
 function onCompare(data) {
-    emptyState.style.display = 'none';
+    const records = document.getElementById('records');
+    document.getElementById('empty-state').style.display = 'none';
     
-    // Expected row
+    // 基准行
     if (data.expected) {
         const expectedRow = document.createElement('div');
         expectedRow.className = 'record-row';
@@ -301,10 +219,10 @@ function onCompare(data) {
             <span class="size">${data.expected.data.length / 2}B</span>
             <span class="data">基准: ${truncateHex(data.expected.data, 40)}</span>
         `;
-        recordsDiv.appendChild(expectedRow);
+        records.appendChild(expectedRow);
     }
     
-    // Actual row
+    // 对比行
     const actualRow = document.createElement('div');
     actualRow.className = 'record-row';
     const matchClass = data.match ? 'match' : 'diff';
@@ -315,69 +233,44 @@ function onCompare(data) {
         <span class="data">对比: ${truncateHex(data.actual.data, 40)}</span>
         <span class="result ${matchClass}">${matchIcon}</span>
     `;
-    recordsDiv.appendChild(actualRow);
+    records.appendChild(actualRow);
     
-    const divider = document.createElement('div');
-    divider.className = 'divider';
-    recordsDiv.appendChild(divider);
-    
-    recordsDiv.scrollTop = recordsDiv.scrollHeight;
+    records.scrollTop = records.scrollHeight;
 }
 
-// On replay event
-function onReplay(data) {
-    const row = document.createElement('div');
-    row.className = 'record-row';
-    row.innerHTML = `
-        <span class="dir rx">RX</span>
-        <span class="size">${data.data.length / 2}B</span>
-        <span class="data" style="color: #238636;">回放: ${truncateHex(data.data, 40)}</span>
-    `;
-    recordsDiv.appendChild(row);
-    recordsDiv.scrollTop = recordsDiv.scrollHeight;
-}
-
-// On stats event
+// 统计事件
 function onStats(data) {
-    statMatch.textContent = data.matched;
-    statDiff.textContent = data.diff;
+    document.getElementById('stat-match').textContent = data.matched;
+    document.getElementById('stat-diff').textContent = data.diff;
 }
 
-// On connected event
-function onConnected(data) {
-    baudDisplay.textContent = `已连接: ${data.device} @ ${data.baud}`;
-}
-
-// On error event
+// 错误事件
 function onError(msg) {
     alert('错误: ' + msg);
 }
 
-// Copy path to clipboard
-function copyPath(id) {
-    let text;
-    if (id) {
-        text = document.getElementById(id).textContent;
-    } else {
-        text = proxyPath.textContent;
-    }
-    
-    if (text && text !== '-') {
-        navigator.clipboard.writeText(text).then(() => {
-            // Brief visual feedback
-            const el = id ? document.getElementById(id) : proxyPath;
-            const original = el.style.background;
-            el.style.background = '#238636';
-            setTimeout(() => el.style.background = original, 200);
+// 复制端口
+function copyPort(type) {
+    const port = type === 'upper' ? state.upperPort : state.lowerPort;
+    if (port) {
+        navigator.clipboard.writeText(port).then(() => {
+            const el = document.getElementById(type + '-port');
+            const original = el.style.color;
+            el.style.color = '#238636';
+            setTimeout(() => el.style.color = original, 200);
         });
     }
 }
 
-// Truncate hex string
+// 截断 hex
 function truncateHex(hex, maxLen) {
     if (!hex || hex.length <= maxLen) return hex || '';
     return hex.substring(0, maxLen) + '...';
 }
 
-// Expose copyPath globally
-window.copyPath = copyPath;
+// 暴露全局函数
+window.onLowerTypeChange = onLowerTypeChange;
+window.toggleAction = toggleAction;
+window.saveSession = saveSession;
+window.loadGolden = loadGolden;
+window.copyPort = copyPort;
