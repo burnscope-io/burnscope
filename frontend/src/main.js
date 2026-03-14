@@ -26,19 +26,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // 初始化端口
 async function initPorts() {
+    console.log('initPorts: calling...');
     try {
         const ports = await window.go.main.App.InitPorts();
-        if (ports) {
+        console.log('initPorts: result =', ports);
+        if (ports && ports.upper && ports.lower) {
             state.upperPort = ports.upper;
             state.lowerPort = ports.lower;
             updatePorts();
         } else {
+            console.error('initPorts: invalid result', ports);
             document.getElementById('upper-port').textContent = '初始化失败';
-            document.getElementById('lower-port').textContent = '初始化失败';
+            document.getElementById('upper-port').style.color = '#f85149';
+            document.getElementById('lower-port').textContent = ports ? 'null result' : 'error';
+            document.getElementById('lower-port').style.color = '#f85149';
         }
     } catch (e) {
         console.error('Init ports failed:', e);
         document.getElementById('upper-port').textContent = '错误: ' + e;
+        document.getElementById('upper-port').style.color = '#f85149';
+        document.getElementById('lower-port').textContent = '错误';
+        document.getElementById('lower-port').style.color = '#f85149';
     }
 }
 

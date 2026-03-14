@@ -66,7 +66,9 @@ func (a *App) InitPorts() map[string]string {
 	// 创建上位串口（代理）
 	upper, err := transport.NewPtyTransport()
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建上位串口失败: %v", err))
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建上位串口失败: %v", err))
+		}
 		return nil
 	}
 	a.upperPty = upper
@@ -75,7 +77,9 @@ func (a *App) InitPorts() map[string]string {
 	// 创建下位串口（虚拟）
 	lower, err := transport.NewPtyTransport()
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建下位串口失败: %v", err))
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建下位串口失败: %v", err))
+		}
 		return nil
 	}
 	a.lowerPty = lower
