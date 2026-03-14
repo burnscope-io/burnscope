@@ -1,6 +1,5 @@
 // burnscope frontend
 
-let runtime;
 let state = {
     isRunning: false,
     lowerType: 'virtual',
@@ -10,28 +9,38 @@ let state = {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-    runtime = window['@wailsapp/runtime'];
-    
     // 监听事件
-    runtime.EventsOn('ports_ready', onPortsReady);
-    runtime.EventsOn('data', onData);
-    runtime.EventsOn('compare', onCompare);
-    runtime.EventsOn('stats', onStats);
-    runtime.EventsOn('error', onError);
+    window.runtime.EventsOn('data', onData);
+    window.runtime.EventsOn('compare', onCompare);
+    window.runtime.EventsOn('replay', onReplay);
+    window.runtime.EventsOn('stats', onStats);
+    window.runtime.EventsOn('error', onError);
     
-    // 获取端口
-    try {
-        state.upperPort = await window.go.main.App.GetUpperPort();
-        state.lowerPort = await window.go.main.App.GetLowerPort();
-        updatePorts();
-    } catch (e) {
-        console.error('Get ports failed:', e);
-    }
+    // 初始化端口
+    await initPorts();
     
     // 加载物理串口列表
     await loadPhysicalPorts();
     setInterval(loadPhysicalPorts, 3000);
 });
+
+// 初始化端口
+async function initPorts() {
+    try {
+        const ports = await window.go.main.App.InitPorts();
+        if (ports) {
+            state.upperPort = ports.upper;
+            state.lowerPort = ports.lower;
+            updatePorts();
+        } else {
+            document.getElementById('upper-port').textContent = '初始化失败';
+            document.getElementById('lower-port').textContent = '初始化失败';
+        }
+    } catch (e) {
+        console.error('Init ports failed:', e);
+        document.getElementById('upper-port').textContent = '错误: ' + e;
+    }
+}
 
 // 更新端口显示
 function updatePorts() {
@@ -45,12 +54,16 @@ async function loadPhysicalPorts() {
         const ports = await window.go.main.App.ListSerialPorts();
         const select = document.getElementById('physical-port');
         select.innerHTML = '';
-        ports.forEach(port => {
-            const opt = document.createElement('option');
-            opt.value = port;
-            opt.textContent = port;
-            select.appendChild(opt);
-        });
+        if (ports.length === 0) {
+            select.innerHTML = '<option value="">无物理串口</option>';
+        } else {
+            ports.forEach(port => {
+                const opt = document.createElement('option');
+                opt.value = port;
+                opt.textContent = port;
+                select.appendChild(opt);
+            });
+        }
     } catch (e) {
         console.error('Load ports failed:', e);
     }
@@ -100,6 +113,10 @@ async function start() {
             case 'physical':
                 const port = document.getElementById('physical-port').value;
                 const baud = parseInt(document.getElementById('baud-rate').value);
+                if (!port) {
+                    alert('请选择物理串口');
+                    return;
+                }
                 await window.go.main.App.StartRecord(port, baud);
                 break;
             case 'compare':
@@ -127,7 +144,7 @@ async function stop() {
         state.isRunning = false;
         const btn = document.getElementById('action-btn');
         btn.classList.remove('stop');
-        onLowerTypeChange(); // 恢复按钮文本
+        onLowerTypeChange();
         
         document.getElementById('status-dot').classList.remove('running');
         document.getElementById('status-text').textContent = '就绪';
@@ -153,7 +170,7 @@ async function loadGolden() {
     const file = document.getElementById('golden-file').value || 'session.golden';
     try {
         const count = await window.go.main.App.LoadSession(file);
-        document.getElementById('golden-info').textContent = `已加载: ${count} 条记录`;
+        document.getElementById('golden-info').textContent = '已加载: ' + count + ' 条记录';
     } catch (e) {
         alert('加载失败: ' + e);
     }
@@ -169,28 +186,19 @@ function clearRecords() {
     document.getElementById('stat-diff').textContent = '0';
 }
 
-// 端口就绪
-function onPortsReady(data) {
-    state.upperPort = data.upper;
-    state.lowerPort = data.lower;
-    updatePorts();
-}
-
 // 数据事件
 function onData(data) {
     const records = document.getElementById('records');
-    document.getElementById('empty-state').style.display = 'none';
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = 'none';
     
     const row = document.createElement('div');
     row.className = 'record-row';
-    if (data.replay) row.classList.add('replay');
     
     const dirClass = data.direction.toLowerCase();
-    row.innerHTML = `
-        <span class="dir ${dirClass}">${data.direction}</span>
-        <span class="size">${data.size}B</span>
-        <span class="data">${truncateHex(data.data, 48)}${data.replay ? ' (回放)' : ''}</span>
-    `;
+    row.innerHTML = '<span class="dir ' + dirClass + '">' + data.direction + '</span>' +
+        '<span class="size">' + data.size + 'B</span>' +
+        '<span class="data">' + truncateHex(data.data, 48) + '</span>';
     
     records.appendChild(row);
     records.scrollTop = records.scrollHeight;
@@ -205,20 +213,33 @@ function onData(data) {
     }
 }
 
+// 回放事件
+function onReplay(data) {
+    const records = document.getElementById('records');
+    
+    const row = document.createElement('div');
+    row.className = 'record-row replay';
+    row.innerHTML = '<span class="dir rx">RX</span>' +
+        '<span class="size">' + (data.data.length / 2) + 'B</span>' +
+        '<span class="data">' + truncateHex(data.data, 40) + ' (回放)</span>';
+    
+    records.appendChild(row);
+    records.scrollTop = records.scrollHeight;
+}
+
 // 对比事件
 function onCompare(data) {
     const records = document.getElementById('records');
-    document.getElementById('empty-state').style.display = 'none';
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.style.display = 'none';
     
     // 基准行
     if (data.expected) {
         const expectedRow = document.createElement('div');
         expectedRow.className = 'record-row';
-        expectedRow.innerHTML = `
-            <span class="dir tx">TX</span>
-            <span class="size">${data.expected.data.length / 2}B</span>
-            <span class="data">基准: ${truncateHex(data.expected.data, 40)}</span>
-        `;
+        expectedRow.innerHTML = '<span class="dir tx">TX</span>' +
+            '<span class="size">' + (data.expected.data.length / 2) + 'B</span>' +
+            '<span class="data">基准: ' + truncateHex(data.expected.data, 40) + '</span>';
         records.appendChild(expectedRow);
     }
     
@@ -227,12 +248,10 @@ function onCompare(data) {
     actualRow.className = 'record-row';
     const matchClass = data.match ? 'match' : 'diff';
     const matchIcon = data.match ? '✓' : '✗';
-    actualRow.innerHTML = `
-        <span class="dir tx">TX</span>
-        <span class="size">${data.actual.data.length / 2}B</span>
-        <span class="data">对比: ${truncateHex(data.actual.data, 40)}</span>
-        <span class="result ${matchClass}">${matchIcon}</span>
-    `;
+    actualRow.innerHTML = '<span class="dir tx">TX</span>' +
+        '<span class="size">' + (data.actual.data.length / 2) + 'B</span>' +
+        '<span class="data">对比: ' + truncateHex(data.actual.data, 40) + '</span>' +
+        '<span class="result ' + matchClass + '">' + matchIcon + '</span>';
     records.appendChild(actualRow);
     
     records.scrollTop = records.scrollHeight;
@@ -253,11 +272,11 @@ function onError(msg) {
 function copyPort(type) {
     const port = type === 'upper' ? state.upperPort : state.lowerPort;
     if (port) {
-        navigator.clipboard.writeText(port).then(() => {
+        navigator.clipboard.writeText(port).then(function() {
             const el = document.getElementById(type + '-port');
             const original = el.style.color;
             el.style.color = '#238636';
-            setTimeout(() => el.style.color = original, 200);
+            setTimeout(function() { el.style.color = original; }, 200);
         });
     }
 }

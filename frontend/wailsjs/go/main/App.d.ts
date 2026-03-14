@@ -9,6 +9,8 @@ export function GetStats():Promise<Record<string, number>>;
 
 export function GetUpperPort():Promise<string>;
 
+export function InitPorts():Promise<Record<string, string>>;
+
 export function ListSerialPorts():Promise<Array<string>>;
 
 export function LoadSession(arg1:string):Promise<number>;

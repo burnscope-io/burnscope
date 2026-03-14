@@ -18,6 +18,10 @@ export function GetUpperPort() {
   return window['go']['main']['App']['GetUpperPort']();
 }
 
+export function InitPorts() {
+  return window['go']['main']['App']['InitPorts']();
+}
+
 export function ListSerialPorts() {
   return window['go']['main']['App']['ListSerialPorts']();
 }

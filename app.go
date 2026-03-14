@@ -48,18 +48,26 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	
-	// 启动时立即创建两个 PTY
-	a.initPorts()
 }
 
-// initPorts 初始化端口
-func (a *App) initPorts() {
+// InitPorts 初始化端口（前端调用）
+func (a *App) InitPorts() map[string]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 如果已经初始化，直接返回
+	if a.upperPort != "" && a.lowerPort != "" {
+		return map[string]string{
+			"upper": a.upperPort,
+			"lower": a.lowerPort,
+		}
+	}
+
 	// 创建上位串口（代理）
 	upper, err := transport.NewPtyTransport()
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建上位串口失败: %v", err))
-		return
+		return nil
 	}
 	a.upperPty = upper
 	a.upperPort = upper.SlavePath()
@@ -68,16 +76,15 @@ func (a *App) initPorts() {
 	lower, err := transport.NewPtyTransport()
 	if err != nil {
 		runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("创建下位串口失败: %v", err))
-		return
+		return nil
 	}
 	a.lowerPty = lower
 	a.lowerPort = lower.SlavePath()
 
-	// 通知前端
-	runtime.EventsEmit(a.ctx, "ports_ready", map[string]string{
+	return map[string]string{
 		"upper": a.upperPort,
 		"lower": a.lowerPort,
-	})
+	}
 }
 
 // GetUpperPort 获取上位串口路径
