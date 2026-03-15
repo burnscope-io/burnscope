@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -81,4 +82,14 @@ func (t *PtyTransport) Name() string {
 // SlavePath 返回 slave 设备路径
 func (t *PtyTransport) SlavePath() string {
 	return t.slavePath
+}
+
+// GetBaudRate 获取当前波特率 (Linux PTY 不支持)
+func (t *PtyTransport) GetBaudRate() int {
+	return 0
+}
+
+// BaudChange 返回波特率变化通道 (Linux PTY 不支持)
+func (t *PtyTransport) BaudChange() <-chan int {
+	return nil
 }

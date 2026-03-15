@@ -97,15 +97,15 @@
         select:focus, input:focus { outline: none; border-color: #58a6ff; }
         
         .actions { padding: 16px; margin-top: auto; }
+        .btn-row { display: flex; gap: 8px; }
+        .btn-row button { flex: 1; }
         button {
-            width: 100%;
             padding: 12px;
             border: none;
             border-radius: 8px;
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
-            margin-bottom: 8px;
         }
         button.primary { background: #238636; color: white; }
         button.primary:hover { background: #2ea043; }
@@ -143,6 +143,48 @@
         .record-row .result.diff { color: #f85149; }
         .record-row.replay { background: #161b22; }
         
+        .record-row .label {
+            width: 36px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .record-row.baseline {
+            background: #1a1f29;
+        }
+        .record-row.baseline .label {
+            color: #8b949e;
+        }
+        .record-row.actual {
+            margin-bottom: 8px;
+        }
+        .record-row.actual .label {
+            color: #58a6ff;
+        }
+        .record-row.actual.match {
+            background: rgba(35, 134, 54, 0.1);
+        }
+        .record-row.actual.diff {
+            background: rgba(248, 81, 73, 0.15);
+        }
+        .record-row.actual.diff .label {
+            color: #f85149;
+        }
+        .record-sep {
+            height: 1px;
+            background: #30363d;
+            margin: 8px 16px;
+        }
+        .compare-group {
+            margin-bottom: 4px;
+            border-left: 3px solid transparent;
+        }
+        .compare-group.match {
+            border-left-color: #238636;
+        }
+        .compare-group.diff {
+            border-left-color: #f85149;
+        }
+        
         .footer {
             padding: 12px 20px;
             background: #161b22;
@@ -163,6 +205,70 @@
             align-items: center;
             justify-content: center;
             color: #484f58;
+        }
+
+        .mode-options {
+            display: flex;
+            gap: 16px;
+        }
+        .mode-option {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .mode-option input[type="radio"] {
+            display: none;
+        }
+        .mode-option .radio-custom {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #484f58;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: border-color 0.15s;
+        }
+        .mode-option input[type="radio"]:checked + .radio-custom {
+            border-color: #58a6ff;
+        }
+        .mode-option input[type="radio"]:checked + .radio-custom::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #58a6ff;
+            border-radius: 50%;
+        }
+        .mode-option:hover .radio-custom {
+            border-color: #58a6ff;
+        }
+        .mode-option input[type="radio"]:checked ~ span:last-child {
+            color: #58a6ff;
+        }
+        
+        .clear-section {
+            margin-top: auto;
+            padding: 16px;
+            display: flex;
+            justify-content: center;
+        }
+        .btn-clear {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            background: #21262d;
+            color: #c9d1d9;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-clear:hover {
+            background: #30363d;
+            border-color: #484f58;
         }
     </style>
 </head>
@@ -190,54 +296,54 @@
             <!-- 下位串口 -->
             <div class="section">
                 <div class="section-title">下位串口（目标）</div>
-                <div class="config-row">
-                    <div class="config-label">选择类型</div>
-                    <select id="lower-type" onchange="onLowerTypeChange()">
-                        <option value="virtual">虚拟串口（测试）</option>
-                        <option value="physical">物理串口（录制）</option>
-                        <option value="compare">基准对比</option>
-                    </select>
-                </div>
-                <div id="virtual-config">
-                    <div class="port-display">
-                        <div class="port-label">测试程序连接此端口</div>
-                        <div class="port-value" id="lower-port" onclick="copyPort('lower')">初始化中...</div>
-                        <div class="port-hint">点击复制</div>
-                    </div>
-                </div>
-                <div id="physical-config" style="display:none;">
-                    <div class="config-row">
-                        <div class="config-label">物理串口</div>
-                        <select id="physical-port"></select>
-                    </div>
-                    <div class="config-row">
-                        <div class="config-label">波特率</div>
-                        <select id="baud-rate">
-                            <option value="115200">115200</option>
-                            <option value="230400">230400</option>
-                            <option value="460800">460800</option>
-                            <option value="921600">921600</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="compare-config" style="display:none;">
-                    <div class="config-row">
-                        <div class="config-label">基准文件</div>
-                        <input type="text" id="golden-file" value="session.golden">
-                    </div>
-                    <div class="config-row">
-                        <button class="secondary" onclick="loadGolden()">加载基准</button>
-                    </div>
-                    <div id="golden-info" style="font-size:12px;color:#8b949e;"></div>
-                </div>
+                <select id="lower-port" onchange="onLowerPortChange()">
+                    <option value="">初始化中...</option>
+                </select>
             </div>
             
-            <!-- 操作 -->
-            <div class="actions">
-                <button class="primary" id="action-btn" onclick="toggleAction()">开始</button>
-                <button class="secondary" onclick="saveSession()">保存录制</button>
-            </div>
-        </div>
+                                    <!-- 模式选择 -->
+            
+                                    <div class="section">
+            
+                                        <div class="section-title">模式</div>
+            
+                                        <div class="mode-options">
+            
+                                            <label class="mode-option">
+            
+                                                <input type="radio" name="mode" value="record" onchange="onModeChange(this.value)">
+            
+                                                <span class="radio-custom"></span>
+            
+                                                <span>录制</span>
+            
+                                            </label>
+            
+                                            <label class="mode-option">
+            
+                                                <input type="radio" name="mode" value="compare" onchange="onModeChange(this.value)">
+            
+                                                <span class="radio-custom"></span>
+            
+                                                <span>对比</span>
+            
+                                            </label>
+            
+                                        </div>
+            
+                                    </div>
+            
+                        
+            
+                        <!-- 清空按钮 -->
+            
+                        <div class="clear-section">
+            
+                            <button class="btn-clear" onclick="onClear()">清空</button>
+            
+                        </div>
+            
+                    </div>
         
         <div class="main-panel">
             <div class="records-header">

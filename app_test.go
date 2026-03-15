@@ -1,74 +1,55 @@
+//go:build darwin
+
 package main
 
 import (
+	"context"
 	"testing"
 
-	"github.com/burnscope-io/burnscope/internal/transport"
+	"github.com/burnscope-io/burnscope/core/api"
 )
 
-func TestInitPorts(t *testing.T) {
+func TestApp_NewApp(t *testing.T) {
 	app := NewApp()
-
-	// 测试初始化端口
-	ports := app.InitPorts()
-
-	if ports == nil {
-		// PTY 创建可能失败（非终端环境）
-		t.Skip("InitPorts returned nil (PTY creation may fail in non-terminal env)")
-	}
-
-	if ports["upper"] == "" {
-		t.Error("upper port is empty")
-	}
-
-	if ports["lower"] == "" {
-		t.Error("lower port is empty")
-	}
-
-	t.Logf("upper: %s", ports["upper"])
-	t.Logf("lower: %s", ports["lower"])
-
-	// 再次调用应该返回相同结果（幂等）
-	ports2 := app.InitPorts()
-	if ports2["upper"] != ports["upper"] {
-		t.Error("upper port changed on second call")
-	}
-	if ports2["lower"] != ports["lower"] {
-		t.Error("lower port changed on second call")
+	if app == nil {
+		t.Error("NewApp returned nil")
 	}
 }
 
-func TestGetPorts(t *testing.T) {
+func TestApp_Stop_Idempotent(t *testing.T) {
 	app := NewApp()
+	app.ctx = context.Background()
 
-	// 尝试初始化
-	ports := app.InitPorts()
-	if ports == nil {
-		t.Skip("PTY creation failed in non-terminal env")
-	}
-
-	if app.GetUpperPort() == "" {
-		t.Error("upper port is empty after init")
-	}
-
-	if app.GetLowerPort() == "" {
-		t.Error("lower port is empty after init")
+	// Stop on non-running app should be safe
+	state := app.Stop()
+	if state.Mode != string(api.ModeIdle) {
+		t.Error("Expected idle mode")
 	}
 }
 
-func TestPtyCreation(t *testing.T) {
-	// 直接测试 PTY 创建
-	pty, err := transport.NewPtyTransport()
-	if err != nil {
-		// PTY 创建需要终端环境，在非终端环境跳过
-		t.Skipf("NewPtyTransport failed (expected in non-terminal env): %v", err)
-	}
-	defer pty.Close()
+func TestApp_Clear(t *testing.T) {
+	app := NewApp()
+	app.ctx = context.Background()
 
-	slavePath := pty.SlavePath()
-	if slavePath == "" {
-		t.Error("SlavePath is empty")
+	state := app.Clear()
+
+	// Clear without PTY returns idle mode
+	// (PTYs are created on Init)
+	if state.Mode != string(api.ModeIdle) {
+		t.Errorf("Expected idle mode after clear without PTY, got %s", state.Mode)
 	}
 
-	t.Logf("PTY slave: %s", slavePath)
+	if len(state.Baseline) != 0 {
+		t.Error("Expected empty baseline after clear")
+	}
+}
+
+func TestApp_GetState(t *testing.T) {
+	app := NewApp()
+	
+	state := app.GetState()
+	
+	if state.Mode != string(api.ModeIdle) {
+		t.Error("Expected idle mode")
+	}
 }

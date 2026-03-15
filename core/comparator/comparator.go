@@ -4,7 +4,7 @@ package comparator
 import (
 	"bytes"
 
-	"github.com/burnscope-io/burnscope/internal/session"
+	"github.com/burnscope-io/burnscope/core/session"
 )
 
 // Result 对比结果
@@ -29,19 +29,19 @@ func (r Result) String() string {
 
 // LineResult 单行对比结果
 type LineResult struct {
-	Index      int
-	ExpectedTX *session.Record
-	ExpectedRX *session.Record // 对应的 RX 响应
-	Actual     *session.Record
-	Result     Result
+	Index       int
+	ExpectedTX  *session.Record
+	ExpectedRXs []*session.Record // 所有的 RX 响应（可能有多个连续 RX）
+	Actual      *session.Record
+	Result      Result
 }
 
 // Comparator 对比器
-// 假设基准格式为: TX, RX, TX, RX, ...
+// 假设基准格式为: TX, RX*, TX, RX*, ...
 // 对比时只对比 TX，RX 用于回放
 type Comparator struct {
 	golden   *session.Session
-	position int // 当前 TX 位置
+	position int // 当前位置
 	results  []LineResult
 }
 
@@ -55,15 +55,15 @@ func NewComparator(golden *session.Session) *Comparator {
 }
 
 // Compare 对比 TX 记录
-// 返回结果中包��期望的 TX 和对应的 RX 响应
+// 返回结果中包含期望的 TX 和对应的所有 RX 响应
 func (c *Comparator) Compare(actual *session.Record) LineResult {
 	result := LineResult{
-		Index:  len(c.results) + 1,
+		Index:  len(c.results), // 从 0 开始
 		Actual: actual,
 	}
 
 	// 找到下一个 TX 记录
-	expectedTX, expectedRX := c.findNextTXRX()
+	expectedTX, expectedRXs := c.findNextTXRXs()
 
 	if expectedTX == nil {
 		result.Result = Skip
@@ -72,7 +72,7 @@ func (c *Comparator) Compare(actual *session.Record) LineResult {
 	}
 
 	result.ExpectedTX = expectedTX
-	result.ExpectedRX = expectedRX
+	result.ExpectedRXs = expectedRXs
 
 	// 对比原始字节
 	if !bytes.Equal(actual.Data, expectedTX.Data) {
@@ -86,20 +86,20 @@ func (c *Comparator) Compare(actual *session.Record) LineResult {
 	return result
 }
 
-// findNextTXRX 找到下一个 TX 和对应的 RX
-func (c *Comparator) findNextTXRX() (*session.Record, *session.Record) {
+// findNextTXRXs 找到下一个 TX 和所有连续的 RX
+func (c *Comparator) findNextTXRXs() (*session.Record, []*session.Record) {
 	// 跳过 RX 记录，找到下一个 TX
 	for c.position < len(c.golden.Records) {
 		record := &c.golden.Records[c.position]
 		if record.Direction == session.TX {
-			// 找到了 TX，检查是否有对应的 RX
+			// 找到了 TX，收集所有连续的 RX
 			c.position++
-			var rx *session.Record
-			if c.position < len(c.golden.Records) && c.golden.Records[c.position].Direction == session.RX {
-				rx = &c.golden.Records[c.position]
+			var rxs []*session.Record
+			for c.position < len(c.golden.Records) && c.golden.Records[c.position].Direction == session.RX {
+				rxs = append(rxs, &c.golden.Records[c.position])
 				c.position++
 			}
-			return record, rx
+			return record, rxs
 		}
 		c.position++
 	}

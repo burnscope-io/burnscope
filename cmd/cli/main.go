@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/burnscope-io/burnscope/internal/comparator"
-	"github.com/burnscope-io/burnscope/internal/session"
-	"github.com/burnscope-io/burnscope/internal/transport"
+	"github.com/burnscope-io/burnscope/core/comparator"
+	"github.com/burnscope-io/burnscope/core/session"
+	"github.com/burnscope-io/burnscope/core/transport"
 )
 
 func main() {
@@ -268,9 +268,9 @@ func runCompare(input string) {
 				fmt.Printf("对比: [TX] %s %s\n", formatHex(data, 32), result.Result)
 
 				// 回放 RX
-				if result.ExpectedRX != nil {
-					pty.Write(result.ExpectedRX.Data)
-					fmt.Printf("回放: [RX] %s\n", formatHex(result.ExpectedRX.Data, 32))
+				for _, expectedRX := range result.ExpectedRXs {
+					pty.Write(expectedRX.Data)
+					fmt.Printf("回放: [RX] %s\n", formatHex(expectedRX.Data, 32))
 				}
 				fmt.Println("─────────────────────────────────────────")
 				mu.Unlock()

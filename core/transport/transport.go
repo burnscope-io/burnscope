@@ -1,7 +1,9 @@
 // Package transport 定义传输层接口
 package transport
 
-import "io"
+import (
+	"io"
+)
 
 // Transport 传输接口
 type Transport interface {
