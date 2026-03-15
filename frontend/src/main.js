@@ -3,6 +3,10 @@
 import * as App from '../wailsjs/go/main/App.js';
 import { EventsOn } from '../wailsjs/runtime/runtime.js';
 
+// ============ Config ============
+const MAX_DISPLAY_RECORDS = 200;  // 最多显示的记录数
+const SAVE_INTERVAL = 2000;       // 保存间隔（ms）
+
 // ============ State ============
 const state = {
     mode: '',           // '', 'record', 'compare'
@@ -14,7 +18,12 @@ const state = {
     baseline: [],       // [{index, dir, data, size}]
     actual: [],         // [{index, dir, data, size, match}]
     
-    stats: { tx: 0, rx: 0, matched: 0, diff: 0 }
+    stats: { tx: 0, rx: 0, matched: 0, diff: 0 },
+    
+    // 性能优化：渲染节流
+    pendingRender: false,
+    lastSaveTime: 0,
+    needSave: false
 };
 
 // ============ Persist ============
@@ -22,7 +31,14 @@ const STORAGE_KEY = 'burnscope-baseline';
 
 function saveBaseline() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.baseline));
+        // 只保存元数据，不保存完整数据（太大会超限）
+        const metadata = state.baseline.map(r => ({
+            index: r.index,
+            dir: r.dir,
+            size: r.size
+            // 不保存 data 字段，太大了
+        }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(metadata));
     } catch (e) {
         console.warn('Failed to save baseline:', e);
     }
@@ -49,25 +65,46 @@ function clearBaseline() {
     localStorage.removeItem(STORAGE_KEY);
 }
 
+// 定期保存（节流）
+function scheduleSave() {
+    state.needSave = true;
+    const now = Date.now();
+    if (now - state.lastSaveTime > SAVE_INTERVAL) {
+        state.lastSaveTime = now;
+        state.needSave = false;
+        saveBaseline();
+    }
+}
+
 // ============ Reducers ============
 function setState(updates) {
     Object.assign(state, updates);
-    render();
+    requestRender();
 }
 
 function addBaseline(record) {
     state.baseline.push(record);
     if (record.dir === 'TX') state.stats.tx++;
     else state.stats.rx++;
-    saveBaseline();
-    render();
+    scheduleSave();
+    requestRender();
 }
 
 function addActual(record) {
     state.actual.push(record);
     if (record.match === true) state.stats.matched++;
     else if (record.match === false) state.stats.diff++;
-    render();
+    requestRender();
+}
+
+// 请求渲染（节流）
+function requestRender() {
+    if (state.pendingRender) return;
+    state.pendingRender = true;
+    requestAnimationFrame(() => {
+        state.pendingRender = false;
+        render();
+    });
 }
 
 // ============ Effects ============
@@ -228,7 +265,9 @@ function render() {
     // 数据流 - 统一渲染逻辑（录制和对比都是基准+实际两行结构）
     const container = document.getElementById('records');
     
-    if (state.baseline.length === 0) {
+    const totalRecords = state.baseline.length;
+    
+    if (totalRecords === 0) {
         container.innerHTML = '<div class="empty-state"><p>' + 
             (state.mode === 'record' ? '等待数据...' : 
              state.mode === 'compare' ? '没有基准数据' : '请选择模式开始') + 
@@ -236,17 +275,26 @@ function render() {
         return;
     }
     
-    // 统一渲染：每条 baseline 记录都有对应的位置
-    // actual 通过 index 与 baseline 对齐
+    // 只渲染最近的 MAX_DISPLAY_RECORDS 条记录
+    const startIndex = Math.max(0, totalRecords - MAX_DISPLAY_RECORDS);
+    const displayRecords = state.baseline.slice(startIndex);
+    
     let html = '';
     
-    state.baseline.forEach((baseRecord, i) => {
+    // 如果有更多记录未显示，显示提示
+    if (startIndex > 0) {
+        html += `<div class="truncated-notice">... 省略 ${startIndex} 条记录 ...</div>`;
+    }
+    
+    displayRecords.forEach((baseRecord, i) => {
+        const actualIndex = startIndex + i;
+        
         // 基准行（录制和对比都显示）
         html += renderRow(baseRecord, 'baseline');
         
-        // 实际行 - 通过 index 精确匹配
+        // 实���行 - 通过 index 精确匹配
         if (state.mode === 'compare') {
-            const actualRecord = state.actual.find(r => r.index === i);
+            const actualRecord = state.actual.find(r => r.index === actualIndex);
             if (actualRecord) {
                 html += renderRow(actualRecord, 'actual');
             } else {

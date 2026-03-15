@@ -252,8 +252,9 @@ func (s *Service) Clear() api.State {
 
 // loop is the main loop that handles both record and compare modes
 func (s *Service) loop() {
-	txChan := make(chan []byte, 100)
-	rxChan := make(chan []byte, 100)
+	// 增大缓冲区，避免大量数据传输时阻塞
+	txChan := make(chan []byte, 1000)
+	rxChan := make(chan []byte, 1000)
 
 	// TX reader: upper -> internal
 	go func() {
@@ -408,10 +409,7 @@ func (s *Service) handleTX(data []byte) {
 	s.mu.Lock()
 	mode := s.mode
 	conn := s.getCurrentLowerConnLocked()
-	currentLower := s.currentLower
 	s.mu.Unlock()
-
-	println("DEBUG: handleTX - len=", len(data), " currentLower=", currentLower, " conn=", conn != nil, " mode=", string(mode))
 
 	if conn == nil {
 		return
@@ -423,7 +421,8 @@ func (s *Service) handleTX(data []byte) {
 		n, err := conn.Write(data)
 		if err != nil {
 			println("DEBUG: handleTX write error:", err.Error())
-		} else {
+		} else if len(data) > 64 {
+			// 只打印较长的数据包，减少日志量
 			println("DEBUG: handleTX wrote", n, "bytes to lower")
 		}
 		s.recordData(session.TX, data)
@@ -441,12 +440,18 @@ func (s *Service) handleTX(data []byte) {
 func (s *Service) handleRX(data []byte) {
 	s.mu.Lock()
 	mode := s.mode
+	upperPty := s.upperPty
 	s.mu.Unlock()
 
 	switch mode {
 	case api.ModeRecord:
 		// Record mode: forward to upper and record
-		s.upperPty.Write(data)
+		// 异步写入，避免阻塞
+		go func() {
+			if upperPty != nil {
+				upperPty.Write(data)
+			}
+		}()
 		s.recordData(session.RX, data)
 
 	case api.ModeCompare:
@@ -461,8 +466,6 @@ func (s *Service) handleRX(data []byte) {
 // recordData records data to baseline
 func (s *Service) recordData(dir session.Direction, data []byte) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.session.Add(dir, data)
 
 	record := api.Record{
@@ -478,9 +481,12 @@ func (s *Service) recordData(dir session.Direction, data []byte) {
 	} else {
 		s.stats.RX++
 	}
+	onEvent := s.onEvent
+	s.mu.Unlock()
 
-	if s.onEvent != nil {
-		s.onEvent("record", record)
+	// 异步发送事件，不阻塞数据流
+	if onEvent != nil {
+		go onEvent("record", record)
 	}
 }
 
