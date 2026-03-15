@@ -68,3 +68,8 @@ func (a *App) Clear() api.State {
 func (a *App) GetState() api.State {
 	return a.service.GetState()
 }
+
+// SelectLowerPort selects a lower port for communication
+func (a *App) SelectLowerPort(portPath string) api.State {
+	return a.service.SelectLowerPort(portPath)
+}

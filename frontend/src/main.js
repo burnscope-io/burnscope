@@ -292,8 +292,16 @@ function truncateHex(hex, maxLen) {
 }
 
 // ============ Actions ============
-window.onLowerPortChange = function() {
-    // 不需要额外处理
+window.onLowerPortChange = async function() {
+    const select = document.getElementById('lower-port');
+    const value = select.value;
+    if (!value) return;
+    
+    // value format: "portType:portPath"
+    const [portType, portPath] = value.split(':', 2);
+    
+    // Call backend to select port
+    await App.SelectLowerPort(portPath);
 };
 
 window.onModeChange = async function(newMode) {

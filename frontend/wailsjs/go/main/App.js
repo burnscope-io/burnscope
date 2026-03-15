@@ -18,6 +18,10 @@ export function RefreshPorts() {
   return window['go']['main']['App']['RefreshPorts']();
 }
 
+export function SelectLowerPort(arg1) {
+  return window['go']['main']['App']['SelectLowerPort'](arg1);
+}
+
 export function StartCompare() {
   return window['go']['main']['App']['StartCompare']();
 }

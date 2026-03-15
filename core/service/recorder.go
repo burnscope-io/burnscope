@@ -14,6 +14,13 @@ import (
 // EventCallback is called when state changes
 type EventCallback func(event string, data interface{})
 
+// LowerConn represents a lower port connection
+type LowerConn struct {
+	PortPath string
+	PortType string // "virtual" or "physical"
+	Conn     transport.Transport
+}
+
 // Service provides the core recording and comparison functionality
 type Service struct {
 	mu sync.Mutex
@@ -27,8 +34,13 @@ type Service struct {
 	stats      api.Stats
 
 	// Internal
-	upperPty   *transport.PtyTransport
-	lowerPty   *transport.PtyTransport
+	upperPty *transport.PtyTransport
+	lowerPty *transport.PtyTransport // Virtual PTY, always open
+
+	// Lower connection pool
+	lowerConnPool  map[string]*LowerConn // portPath -> connection
+	currentLower   string                 // currently selected lower port path
+
 	session    *session.Session
 	comparator *comparator.Comparator
 
@@ -39,10 +51,11 @@ type Service struct {
 // NewService creates a new service
 func NewService() *Service {
 	return &Service{
-		mode:       api.ModeIdle,
-		lowerPorts: []api.PortInfo{},
-		baseline:   []api.Record{},
-		actual:     []api.Record{},
+		mode:          api.ModeIdle,
+		lowerPorts:    []api.PortInfo{},
+		baseline:      []api.Record{},
+		actual:        []api.Record{},
+		lowerConnPool: make(map[string]*LowerConn),
 	}
 }
 
@@ -91,16 +104,24 @@ func (s *Service) Init() (api.State, error) {
 	s.upperPty = upper
 	s.upperPort = upper.SlavePath()
 
-	// Create lower PTY
+	// Create lower PTY (always open)
 	lower, err := transport.NewPtyTransport()
 	if err != nil {
 		return s.getStateLocked(), err
 	}
 	s.lowerPty = lower
 
-	// Build lower ports list
+	// Add virtual PTY to connection pool
+	virtualPath := lower.SlavePath()
+	s.lowerConnPool[virtualPath] = &LowerConn{
+		PortPath: virtualPath,
+		PortType: "virtual",
+		Conn:     lower,
+	}
+
+	// Build lower ports list (virtual first)
 	s.lowerPorts = []api.PortInfo{
-		{PortPath: lower.SlavePath(), PortType: "virtual"},
+		{PortPath: virtualPath, PortType: "virtual"},
 	}
 
 	// Add physical ports
@@ -111,6 +132,9 @@ func (s *Service) Init() (api.State, error) {
 			PortType: "physical",
 		})
 	}
+
+	// Default to virtual PTY
+	s.currentLower = virtualPath
 
 	// Initialize session
 	s.session = session.NewSession("record", 0)
@@ -224,6 +248,7 @@ func (s *Service) Clear() api.State {
 func (s *Service) loop() {
 	txChan := make(chan []byte, 100)
 	rxChan := make(chan []byte, 100)
+	lowerChangeChan := make(chan struct{}, 1)
 
 	// TX reader: upper -> internal
 	go func() {
@@ -241,21 +266,49 @@ func (s *Service) loop() {
 		}
 	}()
 
-	// RX reader: lower -> internal
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := s.lowerPty.Read(buf)
-			if err != nil {
-				return
-			}
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				rxChan <- data
-			}
+	// RX reader goroutine (restarted when lower port changes)
+	var rxStopChan chan struct{}
+	startRXReader := func() {
+		if rxStopChan != nil {
+			close(rxStopChan)
 		}
-	}()
+		rxStopChan = make(chan struct{})
+		
+		s.mu.Lock()
+		conn := s.getCurrentLowerConnLocked()
+		s.mu.Unlock()
+		
+		if conn == nil {
+			return
+		}
+		
+		go func(stopChan chan struct{}) {
+			buf := make([]byte, 4096)
+			for {
+				select {
+				case <-stopChan:
+					return
+				default:
+					n, err := conn.Read(buf)
+					if err != nil {
+						return
+					}
+					if n > 0 {
+						data := make([]byte, n)
+						copy(data, buf[:n])
+						select {
+						case rxChan <- data:
+						case <-stopChan:
+							return
+						}
+					}
+				}
+			}
+		}(rxStopChan)
+	}
+
+	// Start initial RX reader
+	startRXReader()
 
 	// Main processing loop
 	for {
@@ -264,20 +317,79 @@ func (s *Service) loop() {
 			s.handleTX(txData)
 		case rxData := <-rxChan:
 			s.handleRX(rxData)
+		case <-lowerChangeChan:
+			startRXReader()
 		}
 	}
+}
+
+// getCurrentLowerConnLocked returns the current lower connection (must hold lock)
+func (s *Service) getCurrentLowerConnLocked() transport.Transport {
+	if s.currentLower == "" {
+		return nil
+	}
+	conn, ok := s.lowerConnPool[s.currentLower]
+	if !ok {
+		return nil
+	}
+	return conn.Conn
+}
+
+// SelectLowerPort selects a lower port for communication
+func (s *Service) SelectLowerPort(portPath string) api.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check if already selected
+	if s.currentLower == portPath {
+		return s.getStateLocked()
+	}
+
+	// Find port info
+	var portType string
+	for _, p := range s.lowerPorts {
+		if p.PortPath == portPath {
+			portType = p.PortType
+			break
+		}
+	}
+
+	// If physical port, open connection
+	if portType == "physical" {
+		// Check if already in pool
+		if _, ok := s.lowerConnPool[portPath]; !ok {
+			conn, err := transport.NewSerialTransport(portPath, 115200)
+			if err != nil {
+				// Failed to open, stay with current
+				return s.getStateLocked()
+			}
+			s.lowerConnPool[portPath] = &LowerConn{
+				PortPath: portPath,
+				PortType: "physical",
+				Conn:     conn,
+			}
+		}
+	}
+
+	s.currentLower = portPath
+	return s.getStateLocked()
 }
 
 // handleTX handles TX data based on current mode
 func (s *Service) handleTX(data []byte) {
 	s.mu.Lock()
 	mode := s.mode
+	conn := s.getCurrentLowerConnLocked()
 	s.mu.Unlock()
+
+	if conn == nil {
+		return
+	}
 
 	switch mode {
 	case api.ModeRecord:
 		// Record mode: forward to lower and record
-		s.lowerPty.Write(data)
+		conn.Write(data)
 		s.recordData(session.TX, data)
 
 	case api.ModeCompare:

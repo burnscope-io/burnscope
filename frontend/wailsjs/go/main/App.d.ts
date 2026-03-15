@@ -10,6 +10,8 @@ export function Init():Promise<api.State>;
 
 export function RefreshPorts():Promise<api.State>;
 
+export function SelectLowerPort(arg1:string):Promise<api.State>;
+
 export function StartCompare():Promise<api.State>;
 
 export function StartRecord():Promise<api.State>;
