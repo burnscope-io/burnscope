@@ -210,9 +210,14 @@ function render() {
     
     // 下位端口下拉框
     const select = document.getElementById('lower-port');
+    const currentValue = select.value;  // 保存当前选择
     select.innerHTML = state.lowerPorts.map(p => 
         `<option value="${p.portType}:${p.portPath}">${p.portPath}（${p.portType === 'virtual' ? '虚拟串口' : '物理串口'}）</option>`
     ).join('');
+    // 恢复选择（如果选项仍存在）
+    if (currentValue && [...select.options].some(o => o.value === currentValue)) {
+        select.value = currentValue;
+    }
     
     // 统计
     document.getElementById('stat-tx').textContent = state.stats.tx;
