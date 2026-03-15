@@ -41,6 +41,9 @@ type Service struct {
 	lowerConnPool  map[string]*LowerConn // portPath -> connection
 	currentLower   string                 // currently selected lower port path
 
+	// Lower port change notification
+	lowerChangeChan chan struct{}
+
 	session    *session.Session
 	comparator *comparator.Comparator
 
@@ -51,11 +54,12 @@ type Service struct {
 // NewService creates a new service
 func NewService() *Service {
 	return &Service{
-		mode:          api.ModeIdle,
-		lowerPorts:    []api.PortInfo{},
-		baseline:      []api.Record{},
-		actual:        []api.Record{},
-		lowerConnPool: make(map[string]*LowerConn),
+		mode:            api.ModeIdle,
+		lowerPorts:      []api.PortInfo{},
+		baseline:        []api.Record{},
+		actual:          []api.Record{},
+		lowerConnPool:   make(map[string]*LowerConn),
+		lowerChangeChan: make(chan struct{}, 1),
 	}
 }
 
@@ -103,6 +107,7 @@ func (s *Service) Init() (api.State, error) {
 	}
 	s.upperPty = upper
 	s.upperPort = upper.SlavePath()
+	println("DEBUG: upperPort =", s.upperPort, "(connect esptool/idf.py to this)")
 
 	// Create lower PTY (always open)
 	lower, err := transport.NewPtyTransport()
@@ -113,6 +118,7 @@ func (s *Service) Init() (api.State, error) {
 
 	// Add virtual PTY to connection pool
 	virtualPath := lower.SlavePath()
+	println("DEBUG: lowerPty =", virtualPath, "(virtual lower port)")
 	s.lowerConnPool[virtualPath] = &LowerConn{
 		PortPath: virtualPath,
 		PortType: "virtual",
@@ -248,7 +254,6 @@ func (s *Service) Clear() api.State {
 func (s *Service) loop() {
 	txChan := make(chan []byte, 100)
 	rxChan := make(chan []byte, 100)
-	lowerChangeChan := make(chan struct{}, 1)
 
 	// TX reader: upper -> internal
 	go func() {
@@ -276,11 +281,15 @@ func (s *Service) loop() {
 		
 		s.mu.Lock()
 		conn := s.getCurrentLowerConnLocked()
+		currentLower := s.currentLower
 		s.mu.Unlock()
 		
 		if conn == nil {
+			println("DEBUG: startRXReader - no connection, currentLower=", currentLower)
 			return
 		}
+		
+		println("DEBUG: startRXReader - starting for", currentLower)
 		
 		go func(stopChan chan struct{}) {
 			buf := make([]byte, 4096)
@@ -291,6 +300,7 @@ func (s *Service) loop() {
 				default:
 					n, err := conn.Read(buf)
 					if err != nil {
+						println("DEBUG: RX reader error:", err.Error())
 						return
 					}
 					if n > 0 {
@@ -317,7 +327,8 @@ func (s *Service) loop() {
 			s.handleTX(txData)
 		case rxData := <-rxChan:
 			s.handleRX(rxData)
-		case <-lowerChangeChan:
+		case <-s.lowerChangeChan:
+			println("DEBUG: received lowerChangeChan notification")
 			startRXReader()
 		}
 	}
@@ -354,13 +365,20 @@ func (s *Service) SelectLowerPort(portPath string) api.State {
 		}
 	}
 
+	// Debug: log what we found
+	println("SelectLowerPort: portPath=", portPath, " portType=", portType, " lowerPorts count=", len(s.lowerPorts))
+	for _, p := range s.lowerPorts {
+		println("  - port: ", p.PortPath, " type: ", p.PortType)
+	}
+
 	// If physical port, open connection
 	if portType == "physical" {
 		// Check if already in pool
 		if _, ok := s.lowerConnPool[portPath]; !ok {
 			conn, err := transport.NewSerialTransport(portPath, 115200)
 			if err != nil {
-				// Failed to open, stay with current
+				// Failed to open, log error
+				println("Failed to open serial port:", err.Error())
 				return s.getStateLocked()
 			}
 			s.lowerConnPool[portPath] = &LowerConn{
@@ -368,10 +386,20 @@ func (s *Service) SelectLowerPort(portPath string) api.State {
 				PortType: "physical",
 				Conn:     conn,
 			}
+			println("Successfully opened serial port:", portPath, "baud: 115200")
 		}
 	}
 
 	s.currentLower = portPath
+	println("DEBUG: currentLower set to:", portPath)
+	
+	// Notify loop to restart RX reader
+	select {
+	case s.lowerChangeChan <- struct{}{}:
+		println("DEBUG: notified loop to restart RX reader")
+	default:
+	}
+	
 	return s.getStateLocked()
 }
 
@@ -380,7 +408,10 @@ func (s *Service) handleTX(data []byte) {
 	s.mu.Lock()
 	mode := s.mode
 	conn := s.getCurrentLowerConnLocked()
+	currentLower := s.currentLower
 	s.mu.Unlock()
+
+	println("DEBUG: handleTX - len=", len(data), " currentLower=", currentLower, " conn=", conn != nil, " mode=", string(mode))
 
 	if conn == nil {
 		return
@@ -389,7 +420,12 @@ func (s *Service) handleTX(data []byte) {
 	switch mode {
 	case api.ModeRecord:
 		// Record mode: forward to lower and record
-		conn.Write(data)
+		n, err := conn.Write(data)
+		if err != nil {
+			println("DEBUG: handleTX write error:", err.Error())
+		} else {
+			println("DEBUG: handleTX wrote", n, "bytes to lower")
+		}
 		s.recordData(session.TX, data)
 
 	case api.ModeCompare:
